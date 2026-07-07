@@ -101,7 +101,23 @@ The wrapper logs bridge output to:
 /home/troy/Documents/SimRacing/lmu-rpm/moza-rpm-launch.log
 ```
 
-## 6. Button color behavior
+## 6. Proton upgrade safety check
+
+After changing Proton versions, run:
+
+```bash
+STEAM_APP_ID=2399420 ./scripts/check-proton-setup.sh
+```
+
+This verifies:
+
+- prefix path exists
+- selected Proton runtime exists
+- matching wine/wineserver binaries are found
+- wheel serial device is visible
+- COM1 mapping exists in Wine registry
+
+## 7. Button color behavior
 
 By default, the bridge preserves your wheel profile colors.
 
@@ -109,13 +125,13 @@ By default, the bridge preserves your wheel profile colors.
 - To force bridge RPM colors, set `MOZA_FORCE_RPM_COLORS=1`
 - To force bridge button colors, set `MOZA_FORCE_BUTTON_COLORS=1`
 
-## 7. Development and maintenance guide
+## 8. Development and maintenance guide
 
 For full project architecture, Proton migration strategy, troubleshooting playbook, and Git workflow:
 
 See `/home/troy/Documents/SimRacing/lmu-rpm/DEVELOPING.md`.
 
-## 8. Expected result
+## 9. Expected result
 
 When the bridge connects successfully, the wheel LEDs should light up briefly and then follow engine RPM as you drive in LMU.
 
