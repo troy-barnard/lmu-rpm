@@ -10,34 +10,77 @@ use winapi::um::handleapi::CloseHandle;
 use winapi::um::memoryapi::{FILE_MAP_READ, MapViewOfFile, UnmapViewOfFile};
 use winapi::um::winbase::OpenFileMappingA;
 
+/// Candidate shared-memory mapping names exposed by LMU under Wine/Proton.
+///
+/// Some environments expose the object in the default namespace (`LMU_Data`)
+/// while others expose it in the global namespace (`Global\\LMU_Data`).
 const LMU_MAPPING_NAMES: [&[u8]; 2] = [b"LMU_Data\0", b"Global\\LMU_Data\0"];
+
+/// Byte offset from the start of the LMU shared-memory block to telemetry data.
 const LMU_TELEMETRY_OFFSET: usize = 128_464;
+
+/// Offset within the telemetry block where per-vehicle telemetry records begin.
 const LMU_TELEM_INFO_OFFSET: usize = 4;
+
+/// Size in bytes of a single per-vehicle telemetry record.
 const LMU_TELEM_INFO_SIZE: usize = 1_888;
+
+/// Offset within a vehicle telemetry record for current engine RPM (`f64`).
 const LMU_ENGINE_RPM_OFFSET: usize = 356;
+
+/// Offset within a vehicle telemetry record for engine max RPM (`f64`).
 const LMU_ENGINE_MAX_RPM_OFFSET: usize = 532;
+
+/// Upper bound for valid LMU vehicle indices in shared telemetry.
 const LMU_MAX_VEHICLES: u8 = 104;
 
+/// Base packet template for Moza RPM LED bitmask updates.
+///
+/// Bytes at indices 6 and 7 are populated with LED on/off bits before sending.
+/// The final byte (index 10) is replaced with the computed packet checksum.
 const RPM_MASK_TEMPLATE: [u8; 11] = [0x7e, 0x06, 0x3f, 0x17, 0x1a, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00];
+
+/// First color-configuration packet for RPM LEDs.
 const RPM_COLOR_PAYLOAD_1: [u8; 27] = [0x7e, 0x16, 0x3f, 0x17, 0x19, 0x00, 0x00, 0x00, 0xff, 0x00, 0x01, 0x80, 0xff, 0x00, 0x02, 0xff, 0xff, 0x00, 0x03, 0xff, 0x00, 0x00, 0x04, 0xff, 0x00, 0x00, 0x00];
+
+/// Second color-configuration packet for RPM LEDs.
 const RPM_COLOR_PAYLOAD_2: [u8; 27] = [0x7e, 0x16, 0x3f, 0x17, 0x19, 0x00, 0x05, 0xff, 0x00, 0x00, 0x06, 0xff, 0x00, 0x00, 0x07, 0xff, 0x00, 0x00, 0x08, 0xff, 0x00, 0x00, 0x09, 0xff, 0x00, 0x00, 0x00];
+
+/// Third color-configuration packet for RPM LEDs.
 const RPM_COLOR_PAYLOAD_3: [u8; 27] = [0x7e, 0x16, 0x3f, 0x17, 0x19, 0x00, 0x0a, 0xff, 0x7f, 0x00, 0x0b, 0xff, 0x7f, 0x00, 0x0c, 0xff, 0x7f, 0x00, 0x0d, 0x00, 0x00, 0xff, 0x0e, 0x00, 0x00, 0xff, 0x00];
+
+/// First color-configuration packet for button LEDs.
 const BTN_COLOR_PAYLOAD_1: [u8; 27] = [0x7e, 0x16, 0x3f, 0x17, 0x19, 0x01, 0x00, 0xff, 0x00, 0x00, 0x01, 0xff, 0x00, 0x00, 0x02, 0xff, 0x00, 0x00, 0x03, 0xff, 0x00, 0x00, 0x04, 0xff, 0x00, 0x00, 0x00];
+
+/// Second color-configuration packet for button LEDs.
 const BTN_COLOR_PAYLOAD_2: [u8; 27] = [0x7e, 0x16, 0x3f, 0x17, 0x19, 0x01, 0x05, 0xff, 0x00, 0x00, 0x06, 0xff, 0x00, 0x00, 0x07, 0xff, 0x00, 0x00, 0x08, 0xff, 0x00, 0x00, 0x09, 0xff, 0x00, 0x00, 0x00];
 
+/// RPM percentage above which the shift lights enter flashing mode.
 const LED_FLASH_THRESHOLD: u8 = 95;
 
+/// Serial connection state for a Moza wheel/base.
+///
+/// Holds the open serial port and optional flash timing state used to toggle
+/// LEDs when RPM enters the flashing threshold region.
 struct MozaSerial {
     port: Box<dyn serialport::SerialPort>,
     flash_start: Option<Instant>,
 }
 
+/// Wrapper around LMU shared-memory mapping resources.
+///
+/// Stores both the mapping handle and the mapped view pointer so they can be
+/// safely released when dropped.
 struct LmuSharedMemory {
     mapping_handle: HANDLE,
     mapped_view: *const u8,
 }
 
 impl LmuSharedMemory {
+    /// Opens and maps LMU shared memory in read-only mode.
+    ///
+    /// Tries each candidate mapping name in `LMU_MAPPING_NAMES` until one
+    /// succeeds. Returns an error if neither mapping can be opened or mapped.
     fn connect() -> std::io::Result<Self> {
         unsafe {
             let mut mapping_handle: HANDLE = std::ptr::null_mut();
@@ -65,6 +108,10 @@ impl LmuSharedMemory {
         }
     }
 
+    /// Reads the local player's current and max RPM from mapped LMU telemetry.
+    ///
+    /// Returns `None` if no player vehicle is active, indices are invalid, or
+    /// parsed RPM values are non-finite/invalid.
     fn read_player_rpm(&self) -> Option<(f64, f64)> {
         unsafe {
             let telemetry = self.mapped_view.add(LMU_TELEMETRY_OFFSET);
@@ -94,6 +141,7 @@ impl LmuSharedMemory {
 }
 
 impl Drop for LmuSharedMemory {
+    /// Releases LMU shared-memory resources when the wrapper goes out of scope.
     fn drop(&mut self) {
         unsafe {
             if !self.mapped_view.is_null() {
@@ -107,6 +155,9 @@ impl Drop for LmuSharedMemory {
 }
 
 impl MozaSerial {
+    /// Computes Moza packet checksum using the protocol's additive scheme.
+    ///
+    /// Starts from seed `0x0d` and wraps on overflow while summing all bytes.
     fn checksum(buf: &[u8]) -> u8 {
         let mut ret: u8 = 0x0d;
         for b in buf {
@@ -115,11 +166,15 @@ impl MozaSerial {
         ret
     }
 
+    /// Writes a packet payload to the serial port.
     fn send_packet(&mut self, payload: &[u8]) -> std::io::Result<()> {
         self.port.write(payload)?;
         Ok(())
     }
 
+    /// Builds and sends an RPM LED bitmask update for the given percent.
+    ///
+    /// The mask progressively enables LEDs from approximately 65% to 93% RPM.
     fn send_rpm_telemetry_command(&mut self, percent: u8) -> std::io::Result<()> {
         let mut packet = RPM_MASK_TEMPLATE.to_vec();
         if percent >= 65 {
@@ -171,6 +226,7 @@ impl MozaSerial {
         self.send_packet(&packet)
     }
 
+    /// Opens the Moza serial device on `COM1` at 115200 baud.
     pub fn create() -> std::io::Result<Self> {
         let port = serialport::new("COM1", 115200)
             .timeout(Duration::from_millis(100))
@@ -178,10 +234,17 @@ impl MozaSerial {
         Ok(MozaSerial { port, flash_start: None })
     }
 
+    /// Sends button LED telemetry updates.
+    ///
+    /// Currently a stub because button state control is not implemented yet.
     fn send_btn_telemetry_command(&mut self, _leds: u16) -> std::io::Result<()> {
         Ok(())
     }
 
+    /// Sends startup color configuration to RPM/button LEDs when requested.
+    ///
+    /// Color payloads are checksummed and transmitted only for the groups whose
+    /// `force_*_colors` flag is enabled.
     pub fn initialize(&mut self, force_rpm_colors: bool, force_button_colors: bool) -> std::io::Result<()> {
         sleep(Duration::from_millis(250));
 
@@ -217,6 +280,10 @@ impl MozaSerial {
         Ok(())
     }
 
+    /// Updates RPM LEDs, applying a blink effect above `LED_FLASH_THRESHOLD`.
+    ///
+    /// When in the flashing zone, output alternates between the real value and
+    /// zero on a timed cadence to create a shift-light blink.
     pub fn update_rpm_telemetry(&mut self, actual_percent: u8) -> std::io::Result<()> {
         let mut percent = actual_percent;
         if percent > LED_FLASH_THRESHOLD {
@@ -239,6 +306,12 @@ impl MozaSerial {
     }
 }
 
+/// Entrypoint for the telemetry bridge.
+///
+/// Initializes serial output, starts a background LED update task, then
+/// continuously reads RPM telemetry from either Assetto Corsa Evo (when `acevo`
+/// CLI arg is present) or LMU native shared memory and forwards scaled RPM
+/// percentages to the Moza device.
 #[tokio::main]
 async fn main() {
     let debug = std::env::var_os("MOZA_RPM_DEBUG").is_some();
