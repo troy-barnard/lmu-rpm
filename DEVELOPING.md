@@ -4,21 +4,21 @@ This guide explains how the project works, how to maintain it, and how to keep i
 
 ## 1. Repository layout and responsibilities
 
-Current folders involved:
+This project folder structure:
 
-- /home/troy/Documents/SimRacing/lmu-rpm
+- `.` (project root)
   - Self-contained runtime wrapper and bridge source.
   - Owns launch scripts, setup scripts, docs, deployed moza-rpm.exe, and bridge source at `moza-rpm-src/`.
 
 Optional external upstream mirror (not required for runtime):
 
-- /home/troy/Documents/SimRacing/moza-rpm
+- `../moza-rpm` (sibling directory)
   - Independent repo if you also maintain upstream-facing bridge changes there.
 
 Practical rule:
 
-- For this project, edit Rust bridge logic in `/home/troy/Documents/SimRacing/lmu-rpm/moza-rpm-src`.
-- Edit startup/runtime behavior in `/home/troy/Documents/SimRacing/lmu-rpm/scripts`.
+- For this project, edit Rust bridge logic in `moza-rpm-src/src/main.rs`.
+- Edit startup/runtime behavior in `scripts/` directory.
 
 ## 2. Configuration management (secrets.json)
 
@@ -74,14 +74,14 @@ Data path:
 
 Key files:
 
-- /home/troy/Documents/SimRacing/lmu-rpm/moza-rpm-src/src/main.rs
+- `moza-rpm-src/src/main.rs`
   - LMU shared-memory reader offsets and map names.
   - LED threshold mapping and initialization behavior.
-- /home/troy/Documents/SimRacing/lmu-rpm/scripts/setup-moza-rpm.sh
+- `scripts/setup-moza-rpm.sh`
   - COM1 mapping in the LMU prefix.
-- /home/troy/Documents/SimRacing/lmu-rpm/scripts/run-moza-rpm.sh
+- `scripts/run-moza-rpm.sh`
   - Launches bridge in matching Proton runtime.
-- /home/troy/Documents/SimRacing/lmu-rpm/scripts/launch-lmu-with-rpm.sh
+- `scripts/launch-lmu-with-rpm.sh`
   - Steam launch wrapper that starts LMU then starts bridge.
 
 ## 4. Build and deploy loop
@@ -190,19 +190,18 @@ Buttons or colors overridden unexpectedly:
 
 Current state:
 
-- /home/troy/Documents/SimRacing/lmu-rpm is a git repo (branch `main`).
-- Bridge source required by runtime is vendored at `/home/troy/Documents/SimRacing/lmu-rpm/moza-rpm-src`.
+- This project is a git repo (branch `main`).
+- Bridge source required by runtime is vendored at `moza-rpm-src/`.
 
 Recommended setup:
 
-- Commit all runtime and bridge-source changes together in the lmu-rpm repo.
+- Commit all runtime and bridge-source changes together in the same repo.
 
 Typical commit flow:
 
-1. cd /home/troy/Documents/SimRacing/lmu-rpm
-2. git add README.md DEVELOPING.md scripts moza-rpm-src
-3. git commit -m "Update bridge and launcher"
-4. git push -u origin main
+1. git add README.md DEVELOPING.md scripts moza-rpm-src
+2. git commit -m "Update bridge and launcher"
+3. git push -u origin main
 
 ## 10. Safe future modifications
 
