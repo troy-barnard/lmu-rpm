@@ -16,18 +16,39 @@ fi
 BRIDGE_PID=""
 cleanup() {
   if [ -n "$BRIDGE_PID" ] && kill -0 "$BRIDGE_PID" 2>/dev/null; then
-    kill "$BRIDGE_PID" >/dev/null 2>&1 || true
+    # Terminate the full bridge process group so proton/wine children do not linger.
+    kill -TERM -- "-$BRIDGE_PID" >/dev/null 2>&1 || true
+    sleep 1
+    kill -KILL -- "-$BRIDGE_PID" >/dev/null 2>&1 || true
   fi
 }
 trap cleanup EXIT INT TERM
 
+is_lmu_process_visible() {
+  pgrep -f "Le Mans Ultimate\\.exe|LeMansUltimate\\.exe" >/dev/null 2>&1
+}
+
 "$@" &
 GAME_PID=$!
 
-(
-  sleep "$START_DELAY"
-  STEAM_APP_ID="$APP_ID" "$BRIDGE_SCRIPT" >>"$LOG_FILE" 2>&1
-) &
+setsid bash -c "sleep '$START_DELAY'; STEAM_APP_ID='$APP_ID' '$BRIDGE_SCRIPT' >>'$LOG_FILE' 2>&1" &
 BRIDGE_PID=$!
+
+seen_lmu_process=0
+missing_count=0
+
+while kill -0 "$GAME_PID" 2>/dev/null; do
+  if is_lmu_process_visible; then
+    seen_lmu_process=1
+    missing_count=0
+  elif [ "$seen_lmu_process" -eq 1 ]; then
+    missing_count=$((missing_count + 1))
+    if [ "$missing_count" -ge 2 ]; then
+      cleanup
+      break
+    fi
+  fi
+  sleep 2
+done
 
 wait "$GAME_PID"

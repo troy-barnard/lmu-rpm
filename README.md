@@ -2,7 +2,7 @@
 
 This project is a practical way to get RPM lights working on a Moza R9 + GS V2 wheel while running Le Mans Ultimate through Proton on Linux.
 
-The approach uses the public project [moza-rpm](https://github.com/wildernessmith/moza-rpm), which talks to the wheel over the serial connection and drives the wheel LEDs from telemetry.
+The approach uses a vendored copy of [moza-rpm](https://github.com/wildernessmith/moza-rpm) under `moza-rpm-src/`, which talks to the wheel over the serial connection and drives the wheel LEDs from telemetry.
 
 ## What you need
 
@@ -23,18 +23,23 @@ rustup target add x86_64-pc-windows-gnu
 
 If `protontricks` is already present, you can skip that part.
 
-## 2. Build the bridge
+## 2. Build the bridge (local source in this folder)
 
 ```bash
-git clone https://github.com/wildernessmith/moza-rpm.git
-cd moza-rpm
+cd /home/troy/Documents/SimRacing/lmu-rpm/moza-rpm-src
 cargo build --release --target x86_64-pc-windows-gnu
 ```
 
 The resulting executable will be at:
 
 ```bash
-target/x86_64-pc-windows-gnu/release/moza-rpm.exe
+/home/troy/Documents/SimRacing/lmu-rpm/moza-rpm-src/target/x86_64-pc-windows-gnu/release/moza-rpm.exe
+```
+
+To deploy it for runtime:
+
+```bash
+cp /home/troy/Documents/SimRacing/lmu-rpm/moza-rpm-src/target/x86_64-pc-windows-gnu/release/moza-rpm.exe /home/troy/Documents/SimRacing/lmu-rpm/moza-rpm.exe
 ```
 
 ## 3. Make the wheel device visible to Proton
@@ -70,7 +75,7 @@ MOZA_RPM_DEBUG=1 STEAM_APP_ID=<your_lmu_steam_app_id> ./scripts/run-moza-rpm.sh
 
 That script will:
 
-- build the Windows bridge executable if needed
+- build the Windows bridge executable from `moza-rpm-src/` if needed
 - copy it into the Proton prefix
 - launch it through the same Proton runtime used for LMU
 
@@ -87,6 +92,25 @@ If you want Steam to start LMU and the RPM bridge together, use this wrapper scr
 Set that line in Steam for LMU:
 
 - Library -> Le Mans Ultimate -> Properties -> Launch Options
+
+Steam Launch Options examples:
+
+```bash
+# Normal auto-start (recommended)
+/home/troy/Documents/SimRacing/lmu-rpm/scripts/launch-lmu-with-rpm.sh %command%
+
+# Auto-start with bridge debug logging
+MOZA_RPM_DEBUG=1 /home/troy/Documents/SimRacing/lmu-rpm/scripts/launch-lmu-with-rpm.sh %command%
+
+# Increase bridge start delay to 15 seconds
+MOZA_BRIDGE_START_DELAY=15 /home/troy/Documents/SimRacing/lmu-rpm/scripts/launch-lmu-with-rpm.sh %command%
+
+# Force bridge-defined RPM colors (normally leave this unset)
+MOZA_FORCE_RPM_COLORS=1 /home/troy/Documents/SimRacing/lmu-rpm/scripts/launch-lmu-with-rpm.sh %command%
+
+# Force bridge-defined button colors (normally leave this unset)
+MOZA_FORCE_BUTTON_COLORS=1 /home/troy/Documents/SimRacing/lmu-rpm/scripts/launch-lmu-with-rpm.sh %command%
+```
 
 Optional environment variables:
 
