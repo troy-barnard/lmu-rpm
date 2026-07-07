@@ -1,14 +1,18 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-APP_ID="${STEAM_APP_ID:-}"
-if [ -z "$APP_ID" ]; then
-  echo "Set STEAM_APP_ID to your Le Mans Ultimate Steam app ID first." >&2
-  echo "Example: STEAM_APP_ID=1969060 ./scripts/setup-moza-rpm.sh" >&2
-  exit 1
-fi
-
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+SCRIPT_DIR="$(dirname "${BASH_SOURCE[0]}")"
+
+# Load configuration from secrets.json
+source "$SCRIPT_DIR/read-secrets.sh" 2>/dev/null || {
+  echo "Error: Could not load secrets.json configuration." >&2
+  exit 1
+}
+
+# Allow override via environment variable
+APP_ID="${STEAM_APP_ID:-$STEAM_APP_ID}"
+
 DEVICE=""
 
 resolve_proton_bin() {
@@ -17,12 +21,7 @@ resolve_proton_bin() {
     return
   fi
 
-  local candidates=(
-    "/home/troy/.local/share/Steam/compatibilitytools.d/GE-Proton10-34-LMU-hid_fixes/proton"
-    "/home/troy/.local/share/Steam/compatibilitytools.d/GE-Proton10-4-LMU-fixbuild/proton"
-    "/home/troy/.local/share/Steam/compatibilitytools.d/GE-Proton10-34/proton"
-    "/ssd2/SteamLibrary/steamapps/common/Proton 11.0/proton"
-  )
+  local candidates=("${PROTON_INSTALL_PATHS_ARRAY[@]}")
 
   local candidate
   for candidate in "${candidates[@]}"; do
@@ -79,10 +78,19 @@ if [ ! -e "$DEVICE_PATH" ]; then
   DEVICE_PATH="$DEVICE"
 fi
 
-PREFIX="/ssd2/SteamLibrary/steamapps/compatdata/${APP_ID}/pfx"
-if [ ! -d "$PREFIX" ]; then
-  echo "Proton prefix not found at $PREFIX" >&2
+# Determine prefix path from Steam library paths
+PREFIX=""
+for steam_lib in "${STEAM_LIBRARY_PATHS_ARRAY[@]}"; do
+  candidate="$steam_lib/steamapps/compatdata/${APP_ID}/pfx"
+  if [ -d "$candidate" ]; then
+    PREFIX="$candidate"
+    break
+  fi
+done
+if [ -z "$PREFIX" ] || [ ! -d "$PREFIX" ]; then
+  echo "Proton prefix not found for app $APP_ID" >&2
   echo "Launch Le Mans Ultimate once in Steam with Proton first, then rerun this script." >&2
+  echo "Searched paths: ${STEAM_LIBRARY_PATHS}" >&2
   exit 3
 fi
 
@@ -100,7 +108,7 @@ fi
 WINE_BIN="${WINE_TOOLS[0]}"
 WINESERVER_BIN="${WINE_TOOLS[1]}"
 
-STEAM_ROOT="/ssd2/SteamLibrary"
+STEAM_ROOT="${STEAM_LIBRARY_PATHS_ARRAY[0]}"
 STEAM_COMPAT_DATA_PATH="${STEAM_ROOT}/steamapps/compatdata/${APP_ID}"
 STEAM_COMPAT_CLIENT_INSTALL_PATH="${STEAM_ROOT}/steamapps"
 STEAM_APP_ID="$APP_ID"

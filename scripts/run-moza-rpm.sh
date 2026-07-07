@@ -1,16 +1,31 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-APP_ID="${STEAM_APP_ID:-}"
-if [ -z "$APP_ID" ]; then
-  echo "Set STEAM_APP_ID to your Le Mans Ultimate Steam app ID first." >&2
-  echo "Example: STEAM_APP_ID=1969060 ./scripts/run-moza-rpm.sh" >&2
-  exit 1
-fi
-
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+SCRIPT_DIR="$(dirname "${BASH_SOURCE[0]}")"
+
+# Load configuration from secrets.json
+source "$SCRIPT_DIR/read-secrets.sh" 2>/dev/null || {
+  echo "Error: Could not load secrets.json configuration." >&2
+  exit 1
+}
+
+# Allow override via environment variable
+APP_ID="${STEAM_APP_ID:-$STEAM_APP_ID}"
+
 BINARY="$ROOT_DIR/moza-rpm.exe"
-PREFIX="/ssd2/SteamLibrary/steamapps/compatdata/${APP_ID}/pfx"
+LOCAL_SOURCE_DIR="$ROOT_DIR/moza-rpm-src"
+FALLBACK_SOURCE_DIR="$ROOT_DIR/../moza-rpm"
+
+# Determine prefix path from Steam library paths
+PREFIX=""
+for steam_lib in "${STEAM_LIBRARY_PATHS_ARRAY[@]}"; do
+  candidate="$steam_lib/steamapps/compatdata/${APP_ID}/pfx"
+  if [ -d "$candidate" ]; then
+    PREFIX="$candidate"
+    break
+  fi
+done
 
 resolve_proton_bin() {
   if [ -n "${PROTON_BIN:-}" ]; then
@@ -18,12 +33,7 @@ resolve_proton_bin() {
     return
   fi
 
-  local candidates=(
-    "/home/troy/.local/share/Steam/compatibilitytools.d/GE-Proton10-34-LMU-hid_fixes/proton"
-    "/home/troy/.local/share/Steam/compatibilitytools.d/GE-Proton10-4-LMU-fixbuild/proton"
-    "/home/troy/.local/share/Steam/compatibilitytools.d/GE-Proton10-34/proton"
-    "/ssd2/SteamLibrary/steamapps/common/Proton 11.0/proton"
-  )
+  local candidates=("${PROTON_INSTALL_PATHS_ARRAY[@]}")
 
   local candidate
   for candidate in "${candidates[@]}"; do
@@ -56,20 +66,25 @@ resolve_wine_tools() {
   printf '%s\n%s\n' "$wine_bin" "$wineserver_bin"
 }
 
-if [ ! -d "$PREFIX" ]; then
-  echo "Proton prefix not found at $PREFIX" >&2
+if [ -z "$PREFIX" ] || [ ! -d "$PREFIX" ]; then
+  echo "Proton prefix not found for app $APP_ID" >&2
   echo "Launch Le Mans Ultimate once in Steam before running this script." >&2
+  echo "Searched paths: ${STEAM_LIBRARY_PATHS}" >&2
   exit 2
 fi
 
 if [ ! -f "$BINARY" ]; then
-  if [ -d "$ROOT_DIR/../moza-rpm" ]; then
-    cd "$ROOT_DIR/../moza-rpm"
+  if [ -d "$LOCAL_SOURCE_DIR" ]; then
+    cd "$LOCAL_SOURCE_DIR"
+    cargo build --release --target x86_64-pc-windows-gnu
+    cp target/x86_64-pc-windows-gnu/release/moza-rpm.exe "$BINARY"
+  elif [ -d "$FALLBACK_SOURCE_DIR" ]; then
+    cd "$FALLBACK_SOURCE_DIR"
     cargo build --release --target x86_64-pc-windows-gnu
     cp target/x86_64-pc-windows-gnu/release/moza-rpm.exe "$BINARY"
   else
     echo "The compiled moza-rpm.exe was not found." >&2
-    echo "Clone the moza-rpm repository next to this folder, or build it manually first." >&2
+    echo "Expected bridge source at $LOCAL_SOURCE_DIR (preferred) or $FALLBACK_SOURCE_DIR." >&2
     exit 3
   fi
 fi
@@ -93,7 +108,7 @@ if [ -n "${PROTON_BIN:-}" ] && [ "$PROTON_CMD" = run ]; then
   PROTON_CMD=runinprefix
 fi
 
-STEAM_ROOT="/ssd2/SteamLibrary"
+STEAM_ROOT="${STEAM_LIBRARY_PATHS_ARRAY[0]}"
 STEAM_COMPAT_DATA_PATH="${STEAM_ROOT}/steamapps/compatdata/${APP_ID}"
 STEAM_COMPAT_CLIENT_INSTALL_PATH="${STEAM_ROOT}/steamapps"
 STEAM_APP_ID="$APP_ID"

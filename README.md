@@ -13,49 +13,57 @@ The approach uses a vendored copy of [moza-rpm](https://github.com/wildernessmit
 - `cargo` and `rustup`
 - `mingw-w64`
 
+## Configuration
+
+Before running any scripts, you need to customize `secrets.json` for your system:
+
+```bash
+cp example.secrets.json secrets.json
+# Edit secrets.json with your Steam library paths, Proton installation paths, and app ID
+```
+
+Key settings in `secrets.json`:
+- `steam.app_id`: Le Mans Ultimate Steam app ID (default: 2399420)
+- `steam.library_paths`: Array of paths where your Steam libraries are installed
+- `proton.install_paths`: Array of Proton runtime installation paths to search
+- `wheel.serial_device`: Wheel serial device (default: /dev/ttyACM0)
+- `bridge.start_delay_seconds`: Delay before bridge starts (default: 10)
+
+All scripts will automatically load `secrets.json` and use these values.
+
 ## 1. Install prerequisites on CachyOS
 
 ```bash
-sudo pacman -Syu --needed base-devel rustup mingw-w64 protontricks wine-staging
+sudo pacman -Syu --needed base-devel rustup mingw-w64 protontricks wine-staging jq
 rustup default stable
 rustup target add x86_64-pc-windows-gnu
 ```
 
-If `protontricks` is already present, you can skip that part.
+Note: `jq` is required for parsing the `secrets.json` configuration file.
 
 ## 2. Build the bridge (local source in this folder)
 
 ```bash
-cd /home/troy/Documents/SimRacing/lmu-rpm/moza-rpm-src
+cd moza-rpm-src
 cargo build --release --target x86_64-pc-windows-gnu
 ```
 
-The resulting executable will be at:
-
-```bash
-/home/troy/Documents/SimRacing/lmu-rpm/moza-rpm-src/target/x86_64-pc-windows-gnu/release/moza-rpm.exe
-```
-
-To deploy it for runtime:
-
-```bash
-cp /home/troy/Documents/SimRacing/lmu-rpm/moza-rpm-src/target/x86_64-pc-windows-gnu/release/moza-rpm.exe /home/troy/Documents/SimRacing/lmu-rpm/moza-rpm.exe
-```
+The resulting executable will be copied to the project root as `moza-rpm.exe` when you run the launch or setup scripts.
 
 ## 3. Make the wheel device visible to Proton
 
 Your wheel is already detected by Linux as a serial device, so the main requirement is to expose it to the Proton wine prefix as `COM1`.
 
-The helper script in this folder can do that for you once you provide the Steam app ID for Le Mans Ultimate:
+The helper script in this folder can do that for you:
 
 ```bash
 chmod +x scripts/setup-moza-rpm.sh
-STEAM_APP_ID=<your_lmu_steam_app_id> ./scripts/setup-moza-rpm.sh
+./scripts/setup-moza-rpm.sh
 ```
 
 The script will:
 
-- find the Moza serial device (for example `/dev/ttyACM0`)
+- find the Moza serial device (e.g., `/dev/ttyACM0`)
 - create a stable `/dev/moza-r9` symlink
 - configure the Proton prefix so `COM1` points to that device
 
@@ -64,13 +72,13 @@ The script will:
 Start Le Mans Ultimate normally in Steam, then in another terminal run:
 
 ```bash
-STEAM_APP_ID=<your_lmu_steam_app_id> ./scripts/run-moza-rpm.sh
+./scripts/run-moza-rpm.sh
 ```
 
 For telemetry debugging output:
 
 ```bash
-MOZA_RPM_DEBUG=1 STEAM_APP_ID=<your_lmu_steam_app_id> ./scripts/run-moza-rpm.sh
+MOZA_RPM_DEBUG=1 ./scripts/run-moza-rpm.sh
 ```
 
 That script will:
@@ -86,7 +94,7 @@ The setup and run scripts also pin `wine` and `wineserver` to that selected Prot
 If you want Steam to start LMU and the RPM bridge together, use this wrapper script:
 
 ```bash
-/home/troy/Documents/SimRacing/lmu-rpm/scripts/launch-lmu-with-rpm.sh %command%
+./scripts/launch-lmu-with-rpm.sh %command%
 ```
 
 Set that line in Steam for LMU:
@@ -96,41 +104,37 @@ Set that line in Steam for LMU:
 Steam Launch Options examples:
 
 ```bash
-# Normal auto-start (recommended)
-/home/troy/Documents/SimRacing/lmu-rpm/scripts/launch-lmu-with-rpm.sh %command%
+# Normal auto-start (recommended, adjust path to your lmu-rpm folder)
+/path/to/lmu-rpm/scripts/launch-lmu-with-rpm.sh %command%
 
 # Auto-start with bridge debug logging
-MOZA_RPM_DEBUG=1 /home/troy/Documents/SimRacing/lmu-rpm/scripts/launch-lmu-with-rpm.sh %command%
+MOZA_RPM_DEBUG=1 /path/to/lmu-rpm/scripts/launch-lmu-with-rpm.sh %command%
 
-# Increase bridge start delay to 15 seconds
-MOZA_BRIDGE_START_DELAY=15 /home/troy/Documents/SimRacing/lmu-rpm/scripts/launch-lmu-with-rpm.sh %command%
+# Increase bridge start delay to 15 seconds (overrides secrets.json)
+MOZA_BRIDGE_START_DELAY=15 /path/to/lmu-rpm/scripts/launch-lmu-with-rpm.sh %command%
 
 # Force bridge-defined RPM colors (normally leave this unset)
-MOZA_FORCE_RPM_COLORS=1 /home/troy/Documents/SimRacing/lmu-rpm/scripts/launch-lmu-with-rpm.sh %command%
+MOZA_FORCE_RPM_COLORS=1 /path/to/lmu-rpm/scripts/launch-lmu-with-rpm.sh %command%
 
 # Force bridge-defined button colors (normally leave this unset)
-MOZA_FORCE_BUTTON_COLORS=1 /home/troy/Documents/SimRacing/lmu-rpm/scripts/launch-lmu-with-rpm.sh %command%
+MOZA_FORCE_BUTTON_COLORS=1 /path/to/lmu-rpm/scripts/launch-lmu-with-rpm.sh %command%
 ```
 
 Optional environment variables:
 
-- `MOZA_BRIDGE_START_DELAY=10` (seconds to wait before starting the bridge)
-- `STEAM_APP_ID=2399420` (defaults to LMU app ID)
+- `MOZA_BRIDGE_START_DELAY=10` (seconds to wait before starting the bridge, overrides secrets.json)
+- `MOZA_RPM_DEBUG=1` (enable bridge telemetry debug logging)
 - `MOZA_FORCE_RPM_COLORS=1` (optional; by default bridge does not override RPM colors)
 - `MOZA_FORCE_BUTTON_COLORS=1` (optional; by default bridge does not override button colors)
 
-The wrapper logs bridge output to:
-
-```bash
-/home/troy/Documents/SimRacing/lmu-rpm/moza-rpm-launch.log
-```
+The wrapper logs bridge output to `moza-rpm-launch.log` in the project directory.
 
 ## 6. Proton upgrade safety check
 
 After changing Proton versions, run:
 
 ```bash
-STEAM_APP_ID=2399420 ./scripts/check-proton-setup.sh
+./scripts/check-proton-setup.sh
 ```
 
 This verifies:

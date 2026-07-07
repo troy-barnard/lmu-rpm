@@ -2,10 +2,20 @@
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+SCRIPT_DIR="$(dirname "${BASH_SOURCE[0]}")"
 BRIDGE_SCRIPT="$ROOT_DIR/scripts/run-moza-rpm.sh"
 LOG_FILE="$ROOT_DIR/moza-rpm-launch.log"
-APP_ID="${STEAM_APP_ID:-2399420}"
-START_DELAY="${MOZA_BRIDGE_START_DELAY:-10}"
+
+# Load configuration from secrets.json
+source "$SCRIPT_DIR/read-secrets.sh" 2>/dev/null || {
+  echo "Error: Could not load secrets.json configuration." >&2
+  echo "Please copy example.secrets.json to secrets.json and customize it." >&2
+  exit 1
+}
+
+# Allow overrides via environment variables
+APP_ID="${STEAM_APP_ID:-$STEAM_APP_ID}"
+START_DELAY="${MOZA_BRIDGE_START_DELAY:-$BRIDGE_START_DELAY}"
 
 if [ $# -eq 0 ]; then
   echo "No LMU launch command was provided." >&2

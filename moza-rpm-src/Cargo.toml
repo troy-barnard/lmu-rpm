@@ -1,0 +1,19 @@
+[package]
+name = "moza-rpm"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+serialport = "4.8.1"
+tokio = "1.24.1"
+winapi = { version = "0.3.9", features = ["handleapi", "memoryapi", "winbase", "winnt"] }
+
+[dependencies.simetry]
+git = "https://github.com/wildernessmith/simetry.git"
+rev = "e8909e041a981b142e401e91ee92635164e88e77"
+# path = "../../third_party/simetry"
+default-features = false
+
+[dependencies.uom]
+version = "0.34.0"
+features = ["serde"]
