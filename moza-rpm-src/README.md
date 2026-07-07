@@ -36,7 +36,7 @@ to automatically start it using a tool like [Datalink][3]. If you'd prefer
 a more full-featured telemetry utility, consider using [monocoque][4]
 instead.
 
-Note: This has only been tested on my own personal Moza CS V2P wheel on a
+Note: This has only been tested on my own personal Moza GS V2P wheel on a
 Moza R9v3 base.
 
 [1]: https://github.com/Lawstorant/boxflat
