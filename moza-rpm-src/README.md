@@ -37,7 +37,7 @@ a more full-featured telemetry utility, consider using [monocoque][4]
 instead.
 
 Note: This has only been tested on my own personal Moza CS V2P wheel on a
-Moza R12v2 base.
+Moza R9v3 base.
 
 [1]: https://github.com/Lawstorant/boxflat
 [2]: https://github.com/adnanademovic/simetry
