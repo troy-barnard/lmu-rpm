@@ -157,7 +157,7 @@ By default, the bridge preserves your wheel profile colors.
 
 For full project architecture, Proton migration strategy, troubleshooting playbook, and Git workflow:
 
-See `/home/troy/Documents/SimRacing/lmu-rpm/DEVELOPING.md`.
+See [DEVELOPING.md](DEVELOPING.md).
 
 ## 9. Expected result
 
