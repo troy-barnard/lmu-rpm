@@ -1,0 +1,8 @@
+ERROR: ld.so: object '/home/troy/.local/share/Steam/ubuntu12_32/gameoverlayrenderer.so' from LD_PRELOAD cannot be preloaded (wrong ELF class: ELFCLASS32): ignored.
+ERROR: ld.so: object '/home/troy/.local/share/Steam/ubuntu12_32/gameoverlayrenderer.so' from LD_PRELOAD cannot be preloaded (wrong ELF class: ELFCLASS32): ignored.
+ERROR: ld.so: object '/home/troy/.local/share/Steam/ubuntu12_32/gameoverlayrenderer.so' from LD_PRELOAD cannot be preloaded (wrong ELF class: ELFCLASS32): ignored.
+ERROR: ld.so: object '/home/troy/.local/share/Steam/ubuntu12_32/gameoverlayrenderer.so' from LD_PRELOAD cannot be preloaded (wrong ELF class: ELFCLASS32): ignored.
+/usr/share/themes/Breeze-Dark/gtk-2.0/widgets/entry:70: error: unexpected identifier 'direction', expected character '}'
+
+(zenity:32347): Gtk-WARNING **: 17:24:31.268: Unable to locate theme engine in module_path: "adwaita",
+/usr/share/themes/Breeze-Dark/gtk-2.0/widgets/styles:36: error: invalid string constant "combobox_entry", expected valid string constant

@@ -1,0 +1,20 @@
+[17:24:29] Launcher started (APP_ID=2399420, bridge delay=10s).
+[17:24:29] LMU launch command: /home/troy/.local/share/Steam/ubuntu12_32/steam-launch-wrapper -- /home/troy/.local/share/Steam/ubuntu12_32/reaper SteamLaunch AppId=2399420 -- /ssd2/SteamLibrary/steamapps/common/SteamLinuxRuntime_sniper/_v2-entry-point --verb=waitforexitandrun -- /home/troy/.local/share/Steam/compatibilitytools.d/GE-Proton10-34-LMU-hid_fixes/proton waitforexitandrun /ssd2/SteamLibrary/steamapps/common/Le Mans Ultimate/start_protected_game.exe
+[17:24:29] Running runtime reset preflight.
+[17:24:30] Cleanup triggered. Stopping helper processes.
+[17:24:30] Runtime reset preflight completed.
+[17:24:30] Running COM1 preflight setup.
+[17:24:31] COM1 preflight setup completed.
+[17:24:32] Status window started (PID 32344).
+[17:24:32] LMU process started (PID 32409).
+[17:24:32] Bridge launch scheduled after 10s.
+[17:24:32] Bridge process group started (PID 32413).
+[17:24:32] Waiting for LMU Windows process to appear...
+[17:24:36] LMU Windows process detected in Proton.
+[17:26:33] LMU process temporarily missing (1/2).
+[17:26:35] LMU process temporarily missing (2/2).
+[17:26:35] LMU process disappeared; stopping bridge.
+[17:26:35] Cleanup triggered. Stopping helper processes.
+[17:26:37] Bridge process group stopped.
+[17:26:38] LMU process exited.
+[17:26:38] Cleanup triggered. Stopping helper processes.

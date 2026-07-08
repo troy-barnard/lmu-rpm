@@ -12,6 +12,7 @@ The approach uses a vendored copy of [moza-rpm](https://github.com/wildernessmit
 - `protontricks`
 - `cargo` and `rustup`
 - `mingw-w64`
+- `zenity` (optional, for live status window)
 
 ## Configuration
 
@@ -34,7 +35,7 @@ All scripts will automatically load `secrets.json` and use these values.
 ## 1. Install prerequisites on CachyOS
 
 ```bash
-sudo pacman -Syu --needed base-devel rustup mingw-w64 protontricks wine-staging jq
+sudo pacman -Syu --needed base-devel rustup mingw-w64 protontricks wine-staging jq zenity
 rustup default stable
 rustup target add x86_64-pc-windows-gnu
 ```
@@ -124,10 +125,17 @@ Optional environment variables:
 
 - `MOZA_BRIDGE_START_DELAY=10` (seconds to wait before starting the bridge, overrides secrets.json)
 - `MOZA_RPM_DEBUG=1` (enable bridge telemetry debug logging)
+- `MOZA_STATUS_GUI=1` (default; shows live draggable status window if `zenity` is installed)
+- `MOZA_STATUS_GUI=0` (disable status window)
+- `MOZA_AUTO_RESET_ON_LAUNCH=1` (default; kill stale LMU/bridge/wineserver processes before launch)
+- `MOZA_AUTO_RESET_ON_LAUNCH=0` (skip runtime reset preflight)
+- `MOZA_AUTO_SETUP=1` (default; runs COM1 mapping preflight at launcher start)
+- `MOZA_AUTO_SETUP=0` (skip COM1 preflight)
 - `MOZA_FORCE_RPM_COLORS=1` (optional; by default bridge does not override RPM colors)
 - `MOZA_FORCE_BUTTON_COLORS=1` (optional; by default bridge does not override button colors)
 
 The wrapper logs bridge output to `moza-rpm-launch.log` in the project directory.
+The wrapper also writes live status updates to `moza-rpm-status.log`.
 
 ## 6. Proton upgrade safety check
 
@@ -169,3 +177,15 @@ If nothing happens, check:
 - the device path is correct
 - `COM1` was mapped to the correct device in the Proton prefix
 - LMU is running and the bridge is still attached to the same Proton prefix
+
+## 10. Quick recovery if Steam/LMU gets stuck
+
+If LMU or the bridge gets stuck in a running state, run:
+
+```bash
+./scripts/reset-runtime.sh
+```
+
+This script safely stops stale LMU/bridge/proton processes and kills wineserver for the LMU prefix.
+
+The launcher also runs this reset automatically by default each time you start LMU via launch options.

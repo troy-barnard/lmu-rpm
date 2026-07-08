@@ -106,7 +106,7 @@ export STEAM_APP_ID="$APP_ID"
 export WINE="$WINE_BIN"
 export WINESERVER="$WINESERVER_BIN"
 
-if WINEPREFIX="$PREFIX" "$WINE_BIN" reg query 'HKEY_LOCAL_MACHINE\\Software\\Wine\\Ports' /v COM1 >/tmp/moza-com1-check.txt 2>/dev/null; then
+if WINEPREFIX="$PREFIX" "$WINE_BIN" reg query 'HKEY_LOCAL_MACHINE\Software\Wine\Ports' /v COM1 >/tmp/moza-com1-check.txt 2>/dev/null; then
   echo "- COM1 mapping:"
   cat /tmp/moza-com1-check.txt
 else
