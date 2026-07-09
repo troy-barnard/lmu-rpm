@@ -1,6 +1,7 @@
 use std::fs::OpenOptions;
 use std::io::Write as _;
 use std::panic;
+use std::cell::Cell;
 use std::thread::sleep;
 use std::time::{Duration, Instant};
 use tokio::sync::watch;
@@ -55,8 +56,12 @@ const BTN_COLOR_PAYLOAD_1: [u8; 27] = [0x7e, 0x16, 0x3f, 0x17, 0x19, 0x01, 0x00,
 /// Second color-configuration packet for button LEDs.
 const BTN_COLOR_PAYLOAD_2: [u8; 27] = [0x7e, 0x16, 0x3f, 0x17, 0x19, 0x01, 0x05, 0xff, 0x00, 0x00, 0x06, 0xff, 0x00, 0x00, 0x07, 0xff, 0x00, 0x00, 0x08, 0xff, 0x00, 0x00, 0x09, 0xff, 0x00, 0x00, 0x00];
 
+/// Third color-configuration packet for button LEDs.
+const BTN_COLOR_PAYLOAD_3: [u8; 27] = [0x7e, 0x16, 0x3f, 0x17, 0x19, 0x01, 0x0a, 0xff, 0x00, 0x00, 0x0b, 0xff, 0x00, 0x00, 0x0c, 0xff, 0x00, 0x00, 0x0d, 0xff, 0x00, 0x00, 0x0e, 0xff, 0x00, 0x00, 0x00];
+
 /// RPM percentage above which the shift lights enter flashing mode.
 const LED_FLASH_THRESHOLD: u8 = 95;
+const MENU_BUTTON_REFRESH_INTERVAL: Duration = Duration::from_millis(1500);
 
 /// Serial connection state for a Moza wheel/base.
 ///
@@ -74,6 +79,7 @@ struct MozaSerial {
 struct LmuSharedMemory {
     mapping_handle: HANDLE,
     mapped_view: *const u8,
+    preferred_vehicle_idx: Cell<Option<u8>>,
 }
 
 impl LmuSharedMemory {
@@ -104,6 +110,7 @@ impl LmuSharedMemory {
             Ok(Self {
                 mapping_handle,
                 mapped_view,
+                preferred_vehicle_idx: Cell::new(None),
             })
         }
     }
@@ -117,27 +124,92 @@ impl LmuSharedMemory {
             let telemetry = self.mapped_view.add(LMU_TELEMETRY_OFFSET);
             let active_vehicles = *telemetry;
             let player_idx = *telemetry.add(1);
-            let player_has_vehicle = *telemetry.add(2) != 0;
 
-            if !player_has_vehicle || active_vehicles == 0 {
+            if active_vehicles == 0 {
                 return None;
             }
 
-            if player_idx >= active_vehicles || player_idx >= LMU_MAX_VEHICLES {
-                return None;
-            }
+            let read_slot = |idx: u8| -> Option<(f64, f64)> {
+                let info_base = telemetry.add(LMU_TELEM_INFO_OFFSET + (idx as usize * LMU_TELEM_INFO_SIZE));
+                let rpm = *(info_base.add(LMU_ENGINE_RPM_OFFSET) as *const f64);
+                let max_rpm = *(info_base.add(LMU_ENGINE_MAX_RPM_OFFSET) as *const f64);
 
-            let info_base = telemetry.add(LMU_TELEM_INFO_OFFSET + (player_idx as usize * LMU_TELEM_INFO_SIZE));
-            let rpm = *(info_base.add(LMU_ENGINE_RPM_OFFSET) as *const f64);
-            let max_rpm = *(info_base.add(LMU_ENGINE_MAX_RPM_OFFSET) as *const f64);
+                // Ignore clearly invalid/empty slots.
+                if !rpm.is_finite() || !max_rpm.is_finite() {
+                    return None;
+                }
+                if max_rpm < 500.0 || rpm < 0.0 {
+                    return None;
+                }
 
-            if rpm.is_finite() && max_rpm.is_finite() && max_rpm >= 0.0 {
                 Some((rpm, max_rpm))
-            } else {
-                None
+            };
+
+            if player_idx < active_vehicles && player_idx < LMU_MAX_VEHICLES {
+                if let Some(values) = read_slot(player_idx) {
+                    self.preferred_vehicle_idx.set(Some(player_idx));
+                    return Some(values);
+                }
             }
+
+            if let Some(preferred_idx) = self.preferred_vehicle_idx.get() {
+                if preferred_idx < active_vehicles && preferred_idx < LMU_MAX_VEHICLES {
+                    if let Some(values) = read_slot(preferred_idx) {
+                        return Some(values);
+                    }
+                }
+            }
+
+            for idx in 0..active_vehicles {
+                if idx >= LMU_MAX_VEHICLES {
+                    break;
+                }
+                if let Some(values) = read_slot(idx) {
+                    self.preferred_vehicle_idx.set(Some(idx));
+                    return Some(values);
+                }
+            }
+
+            self.preferred_vehicle_idx.set(None);
+
+            None
         }
     }
+}
+
+fn read_env_u64_ms(name: &str, default: u64) -> u64 {
+    std::env::var(name)
+        .ok()
+        .and_then(|raw| raw.trim().parse::<u64>().ok())
+        .filter(|value| *value > 0)
+        .unwrap_or(default)
+}
+
+fn should_log_sample(
+    percent: u8,
+    last_logged_percent: Option<u8>,
+    last_sample_log: Instant,
+    sample_log_interval: Duration,
+) -> bool {
+    if last_sample_log.elapsed() >= sample_log_interval {
+        return true;
+    }
+
+    if let Some(previous) = last_logged_percent {
+        let delta = previous.abs_diff(percent);
+
+        // Emit on large step changes so decel/accel transitions are visible without spam.
+        if delta >= 14 {
+            return true;
+        }
+
+        // Emit quickly when RPM drops near idle to avoid stale-looking high samples.
+        if previous > 8 && percent <= 8 {
+            return true;
+        }
+    }
+
+    false
 }
 
 impl Drop for LmuSharedMemory {
@@ -234,13 +306,6 @@ impl MozaSerial {
         Ok(MozaSerial { port, flash_start: None })
     }
 
-    /// Sends button LED telemetry updates.
-    ///
-    /// Currently a stub because button state control is not implemented yet.
-    fn send_btn_telemetry_command(&mut self, _leds: u16) -> std::io::Result<()> {
-        Ok(())
-    }
-
     /// Sends startup color configuration to RPM/button LEDs when requested.
     ///
     /// Color payloads are checksummed and transmitted only for the groups whose
@@ -253,6 +318,7 @@ impl MozaSerial {
         let mut p3 = RPM_COLOR_PAYLOAD_3.to_vec();
         let mut p4 = BTN_COLOR_PAYLOAD_1.to_vec();
         let mut p5 = BTN_COLOR_PAYLOAD_2.to_vec();
+        let mut p6 = BTN_COLOR_PAYLOAD_3.to_vec();
 
         if force_rpm_colors {
             let end1 = p1.len() - 1;
@@ -272,11 +338,36 @@ impl MozaSerial {
             p4[end4] = Self::checksum(&p4[..end4]);
             let end5 = p5.len() - 1;
             p5[end5] = Self::checksum(&p5[..end5]);
+            let end6 = p6.len() - 1;
+            p6[end6] = Self::checksum(&p6[..end6]);
             self.send_packet(&p4)?;
             self.send_packet(&p5)?;
+            self.send_packet(&p6)?;
         }
 
         sleep(Duration::from_millis(250));
+        Ok(())
+    }
+
+    /// Re-applies bridge button color payloads.
+    ///
+    /// Intended for menu/idle refresh when users opt in to force fully lit
+    /// button colors while telemetry is not yet flowing.
+    fn refresh_button_colors(&mut self) -> std::io::Result<()> {
+        let mut p4 = BTN_COLOR_PAYLOAD_1.to_vec();
+        let mut p5 = BTN_COLOR_PAYLOAD_2.to_vec();
+        let mut p6 = BTN_COLOR_PAYLOAD_3.to_vec();
+
+        let end4 = p4.len() - 1;
+        p4[end4] = Self::checksum(&p4[..end4]);
+        let end5 = p5.len() - 1;
+        p5[end5] = Self::checksum(&p5[..end5]);
+        let end6 = p6.len() - 1;
+        p6[end6] = Self::checksum(&p6[..end6]);
+
+        self.send_packet(&p4)?;
+        self.send_packet(&p5)?;
+        self.send_packet(&p6)?;
         Ok(())
     }
 
@@ -306,6 +397,21 @@ impl MozaSerial {
     }
 }
 
+fn env_flag(name: &str) -> bool {
+    match std::env::var(name) {
+        Ok(raw) => {
+            let value = raw.trim().to_ascii_lowercase();
+            match value.as_str() {
+                "1" | "true" | "yes" | "on" => true,
+                "0" | "false" | "no" | "off" => false,
+                "" => true,
+                _ => true,
+            }
+        }
+        Err(_) => false,
+    }
+}
+
 /// Entrypoint for the telemetry bridge.
 ///
 /// Initializes serial output, starts a background LED update task, then
@@ -314,9 +420,13 @@ impl MozaSerial {
 /// percentages to the Moza device.
 #[tokio::main]
 async fn main() {
-    let debug = std::env::var_os("MOZA_RPM_DEBUG").is_some();
-    let force_rpm_colors = std::env::var_os("MOZA_FORCE_RPM_COLORS").is_some();
-    let force_button_colors = std::env::var_os("MOZA_FORCE_BUTTON_COLORS").is_some();
+    let debug = env_flag("MOZA_RPM_DEBUG");
+    let force_rpm_colors = env_flag("MOZA_FORCE_RPM_COLORS");
+    let enable_button_color_overrides = env_flag("MOZA_ENABLE_BUTTON_COLOR_OVERRIDES");
+    let force_button_colors = enable_button_color_overrides && env_flag("MOZA_FORCE_BUTTON_COLORS");
+    let menu_force_button_colors = enable_button_color_overrides && env_flag("MOZA_MENU_FORCE_BUTTON_COLORS");
+    let idle_led_writes = env_flag("MOZA_IDLE_LED_WRITES");
+    let sample_log_interval = Duration::from_millis(read_env_u64_ms("MOZA_RPM_SAMPLE_LOG_INTERVAL_MS", 2000));
     if debug {
         panic::set_hook(Box::new(|info| {
             if let Ok(mut file) = OpenOptions::new().create(true).append(true).open("moza-rpm-debug.log") {
@@ -352,18 +462,36 @@ async fn main() {
     moza.initialize(force_rpm_colors, force_button_colors).expect("Failed to initialize");
 
     tokio::spawn(async move {
+        let mut last_button_refresh = Instant::now() - MENU_BUTTON_REFRESH_INTERVAL;
+        let mut menu_refresh_enabled = menu_force_button_colors;
         loop {
             match timeout(Duration::from_millis(100), rx.changed()).await {
                 Err(_) => {
-                    moza.send_rpm_telemetry_command(0x03).expect("Failed to send telemetry");
-                    moza.send_btn_telemetry_command(0x3ff).expect("Failed to send telemetry");
+                    if idle_led_writes {
+                        moza.send_rpm_telemetry_command(0x03).expect("Failed to send telemetry");
+                    }
+                    if menu_refresh_enabled && last_button_refresh.elapsed() >= MENU_BUTTON_REFRESH_INTERVAL {
+                        moza.refresh_button_colors().expect("Failed to refresh button colors");
+                        last_button_refresh = Instant::now();
+                    }
                 },
-                Ok(_) => moza.update_rpm_telemetry(*rx.borrow_and_update()).expect("Failed to send telemetry"),
+                Ok(_) => {
+                    moza.update_rpm_telemetry(*rx.borrow_and_update()).expect("Failed to send telemetry");
+
+                    // Once live telemetry is flowing, stop menu refresh writes so wheel profile
+                    // button colors are no longer overridden while on track.
+                    if menu_refresh_enabled {
+                        menu_refresh_enabled = false;
+                    }
+                }
             }
         }
     });
 
     if std::env::args().any(|arg| arg == "acevo") {
+        let mut saw_rpm_sample = false;
+        let mut last_sample_log = Instant::now() - sample_log_interval;
+        let mut last_logged_percent: Option<u8> = None;
         loop {
             println!("Starting connection to Assetto Corsa Evo...");
             log_debug("Starting connection to Assetto Corsa Evo...");
@@ -380,6 +508,17 @@ async fn main() {
                 let rpm = state.rpm() as f64;
                 let max_rpm = state.max_rpm() as f64;
                 let percent = if max_rpm > 0.0 { (100.0 * rpm / max_rpm) as u8 } else { 0 };
+                if !saw_rpm_sample {
+                    println!("RPM telemetry active.");
+                    log_debug("RPM telemetry active.");
+                    saw_rpm_sample = true;
+                }
+                if should_log_sample(percent, last_logged_percent, last_sample_log, sample_log_interval) {
+                    println!("RPM telemetry sample: rpm={rpm:.0} max_rpm={max_rpm:.0} percent={percent}");
+                    log_debug(&format!("RPM telemetry sample: rpm={rpm:.0} max_rpm={max_rpm:.0} percent={percent}"));
+                    last_sample_log = Instant::now();
+                    last_logged_percent = Some(percent);
+                }
                 if debug {
                     println!("telemetry rpm={rpm:.0} max_rpm={max_rpm:.0} percent={percent}");
                     log_debug(&format!("telemetry rpm={rpm:.0} max_rpm={max_rpm:.0} percent={percent}"));
@@ -390,6 +529,9 @@ async fn main() {
             log_debug("Connection finished!");
         }
     } else {
+        let mut saw_rpm_sample = false;
+        let mut last_sample_log = Instant::now() - sample_log_interval;
+        let mut last_logged_percent: Option<u8> = None;
         loop {
             println!("Starting connection to LMU native shared memory...");
             log_debug("Starting connection to LMU native shared memory...");
@@ -401,6 +543,17 @@ async fn main() {
                     loop {
                         if let Some((rpm, max_rpm)) = shared_mem.read_player_rpm() {
                             let percent = if max_rpm > 0.0 { (100.0 * rpm / max_rpm) as u8 } else { 0 };
+                            if !saw_rpm_sample {
+                                println!("RPM telemetry active.");
+                                log_debug("RPM telemetry active.");
+                                saw_rpm_sample = true;
+                            }
+                            if should_log_sample(percent, last_logged_percent, last_sample_log, sample_log_interval) {
+                                println!("RPM telemetry sample: rpm={rpm:.0} max_rpm={max_rpm:.0} percent={percent}");
+                                log_debug(&format!("RPM telemetry sample: rpm={rpm:.0} max_rpm={max_rpm:.0} percent={percent}"));
+                                last_sample_log = Instant::now();
+                                last_logged_percent = Some(percent);
+                            }
                             if debug {
                                 log_debug(&format!("telemetry rpm={rpm:.0} max_rpm={max_rpm:.0} percent={percent}"));
                             }

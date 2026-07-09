@@ -89,8 +89,8 @@ resolve_wineserver() {
 
 echo "[reset-runtime] Stopping stale LMU and bridge processes for app ${APP_ID}..."
 
-# Stop known bridge and game-side processes. Keep the current wrapper process alive.
-pkill -f "run-moza-rpm\.sh|moza-rpm\.exe|proton.*moza-rpm|Le Mans Ultimate\.exe|LeMansUltimate\.exe|start_protected_game\.exe|SteamLaunch AppId=${APP_ID}" >/dev/null 2>&1 || true
+# Stop known bridge and game-side processes. Avoid broad SteamLaunch matches that can hit the current wrapper.
+pkill -f "run-moza-rpm\.sh|moza-rpm\.exe|proton.*moza-rpm|Le Mans Ultimate\.exe|LeMansUltimate\.exe|start_protected_game\.exe" >/dev/null 2>&1 || true
 
 # Kill wineserver for the LMU prefix to fully release locks.
 PREFIX="$(resolve_prefix)"

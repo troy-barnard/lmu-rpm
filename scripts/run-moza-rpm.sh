@@ -17,6 +17,25 @@ BINARY="$ROOT_DIR/moza-rpm.exe"
 LOCAL_SOURCE_DIR="$ROOT_DIR/moza-rpm-src"
 FALLBACK_SOURCE_DIR="$ROOT_DIR/../moza-rpm"
 
+needs_rebuild() {
+  local source_dir="$1"
+  local binary="$2"
+
+  if [ ! -f "$binary" ]; then
+    return 0
+  fi
+
+  if [ -f "$source_dir/Cargo.toml" ] && [ "$source_dir/Cargo.toml" -nt "$binary" ]; then
+    return 0
+  fi
+
+  if [ -d "$source_dir/src" ] && find "$source_dir/src" -type f -newer "$binary" | grep -q .; then
+    return 0
+  fi
+
+  return 1
+}
+
 # Determine prefix path from Steam library paths
 PREFIX=""
 for steam_lib in "${STEAM_LIBRARY_PATHS_ARRAY[@]}"; do
@@ -73,7 +92,15 @@ if [ -z "$PREFIX" ] || [ ! -d "$PREFIX" ]; then
   exit 2
 fi
 
-if [ ! -f "$BINARY" ]; then
+if [ -d "$LOCAL_SOURCE_DIR" ] && needs_rebuild "$LOCAL_SOURCE_DIR" "$BINARY"; then
+  cd "$LOCAL_SOURCE_DIR"
+  cargo build --release --target x86_64-pc-windows-gnu
+  cp target/x86_64-pc-windows-gnu/release/moza-rpm.exe "$BINARY"
+elif [ -d "$FALLBACK_SOURCE_DIR" ] && needs_rebuild "$FALLBACK_SOURCE_DIR" "$BINARY"; then
+  cd "$FALLBACK_SOURCE_DIR"
+  cargo build --release --target x86_64-pc-windows-gnu
+  cp target/x86_64-pc-windows-gnu/release/moza-rpm.exe "$BINARY"
+elif [ ! -f "$BINARY" ]; then
   if [ -d "$LOCAL_SOURCE_DIR" ]; then
     cd "$LOCAL_SOURCE_DIR"
     cargo build --release --target x86_64-pc-windows-gnu

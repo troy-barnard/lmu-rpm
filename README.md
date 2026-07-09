@@ -125,17 +125,38 @@ Optional environment variables:
 
 - `MOZA_BRIDGE_START_DELAY=10` (seconds to wait before starting the bridge, overrides secrets.json)
 - `MOZA_RPM_DEBUG=1` (enable bridge telemetry debug logging)
+- `MOZA_RPM_SAMPLE_LOG_INTERVAL_MS=2000` (default; periodic sample log interval, with automatic immediate logs on large RPM changes)
 - `MOZA_STATUS_GUI=1` (default; shows live draggable status window if `zenity` is installed)
 - `MOZA_STATUS_GUI=0` (disable status window)
 - `MOZA_AUTO_RESET_ON_LAUNCH=1` (default; kill stale LMU/bridge/wineserver processes before launch)
 - `MOZA_AUTO_RESET_ON_LAUNCH=0` (skip runtime reset preflight)
 - `MOZA_AUTO_SETUP=1` (default; runs COM1 mapping preflight at launcher start)
 - `MOZA_AUTO_SETUP=0` (skip COM1 preflight)
-- `MOZA_FORCE_RPM_COLORS=1` (optional; by default bridge does not override RPM colors)
-- `MOZA_FORCE_BUTTON_COLORS=1` (optional; by default bridge does not override button colors)
+- `MOZA_SETUP_RETRY_COUNT=8` (default; COM1 setup retry attempts at launch)
+- `MOZA_SETUP_RETRY_DELAY=2` (default; seconds between COM1 setup retries)
+- `MOZA_BRIDGE_CONNECT_TIMEOUT=45` (default; seconds to wait for telemetry connection before marking failure)
+- `MOZA_BRIDGE_RESTART_ON_CONNECT_FAIL=1` (default; auto-restart bridge once if telemetry connection fails)
+- `MOZA_REQUIRE_RPM_SAMPLE=1` (default; require real RPM sample before declaring bridge healthy)
+- `MOZA_REQUIRE_RPM_SAMPLE=0` (fallback; treat shared-memory open as healthy)
+- `MOZA_FORCE_RPM_COLORS=1` (default from launcher; ensures RPM LED colors are initialized each launch)
+- `MOZA_FORCE_RPM_COLORS=0` (disable forced RPM color initialization)
+- `MOZA_FORCE_BUTTON_COLORS=0` (default from launcher; preserve wheel profile button backlights)
+- `MOZA_FORCE_BUTTON_COLORS=1` (optional; force bridge-defined button colors)
+- `MOZA_MENU_FORCE_BUTTON_COLORS=1` (optional troubleshooting mode; force bridge button colors in menus/idle, then auto-disable after first telemetry update)
+- `MOZA_IDLE_LED_WRITES=0` (default; do not send idle/menu LED updates before telemetry starts, preserving wheel profile in menus)
+- `MOZA_IDLE_LED_WRITES=1` (optional compatibility mode; send idle RPM LED updates while waiting for telemetry)
+- `MOZA_ENABLE_BUTTON_COLOR_OVERRIDES=0` (default; master safety switch, disables all bridge button color writes)
+- `MOZA_ENABLE_BUTTON_COLOR_OVERRIDES=1` (required to allow `MOZA_FORCE_BUTTON_COLORS` / `MOZA_MENU_FORCE_BUTTON_COLORS`)
 
 The wrapper logs bridge output to `moza-rpm-launch.log` in the project directory.
 The wrapper also writes live status updates to `moza-rpm-status.log`.
+
+Status window severity colors:
+
+- Green: success events (setup connected, LMU process detected)
+- Yellow: warnings/retries (temporary process misses, retry attempts)
+- Red: failures (preflight failures, unexpected LMU disappearance)
+- Live telemetry: periodic RPM samples (rpm/max_rpm/percent) appear as `INFO` lines while connected
 
 ## 6. Proton upgrade safety check
 
@@ -160,6 +181,8 @@ By default, the bridge preserves your wheel profile colors.
 - Default: wheel profile colors are kept for both RPM and non-RPM button LEDs
 - To force bridge RPM colors, set `MOZA_FORCE_RPM_COLORS=1`
 - To force bridge button colors, set `MOZA_FORCE_BUTTON_COLORS=1`
+- To keep buttons lit in menus, set `MOZA_MENU_FORCE_BUTTON_COLORS=1` (opt-in; bridge refreshes colors while idle, then stops overriding once on-track telemetry begins)
+- Recommended normal use: leave `MOZA_MENU_FORCE_BUTTON_COLORS` unset/0 so button colors are never overridden in menus.
 
 ## 8. Development and maintenance guide
 

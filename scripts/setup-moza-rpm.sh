@@ -67,15 +67,17 @@ fi
 
 echo "Using device: $DEVICE"
 
+SYMLINK_CREATED=0
 if ln -sfn "$DEVICE" /dev/moza-r9 2>/dev/null; then
+  SYMLINK_CREATED=1
   echo "Created /dev/moza-r9 symlink."
 else
   echo "Could not create /dev/moza-r9 without elevated privileges; using $DEVICE directly."
 fi
 
-DEVICE_PATH="/dev/moza-r9"
-if [ ! -e "$DEVICE_PATH" ]; then
-  DEVICE_PATH="$DEVICE"
+DEVICE_PATH="$DEVICE"
+if [ "$SYMLINK_CREATED" -eq 1 ] && [ -e /dev/moza-r9 ]; then
+  DEVICE_PATH="/dev/moza-r9"
 fi
 
 # Determine prefix path from Steam library paths
@@ -120,6 +122,6 @@ WINEPREFIX="$PREFIX" "$WINE_BIN" reg add 'HKEY_LOCAL_MACHINE\Software\Wine\Ports
 cat <<EOF
 Moza device mapped to Proton COM1.
 Prefix: $PREFIX
-Device: /dev/moza-r9
+Device: $DEVICE_PATH
 Next step: run ./scripts/run-moza-rpm.sh
 EOF
