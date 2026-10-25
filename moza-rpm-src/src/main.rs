@@ -1,9 +1,10 @@
-use std::fs::OpenOptions;
+use std::fs::{metadata, OpenOptions};
 use std::io::Write as _;
 use std::panic;
 use std::cell::Cell;
+use std::path::PathBuf;
 use std::thread::sleep;
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime};
 use tokio::sync::watch;
 use tokio::time::{sleep as tokio_sleep, timeout};
 use winapi::shared::ntdef::HANDLE;
@@ -62,6 +63,20 @@ const BTN_COLOR_PAYLOAD_3: [u8; 27] = [0x7e, 0x16, 0x3f, 0x17, 0x19, 0x01, 0x0a,
 /// RPM percentage above which the shift lights enter flashing mode.
 const LED_FLASH_THRESHOLD: u8 = 95;
 const MENU_BUTTON_REFRESH_INTERVAL: Duration = Duration::from_millis(1500);
+const CONTROL_POLL_INTERVAL: Duration = Duration::from_millis(250);
+const DEFAULT_RPM_SCALE: f32 = 1.0;
+const DEFAULT_BRIGHTNESS: f32 = 1.0;
+const MIN_RPM_SCALE: f32 = 0.6;
+const MAX_RPM_SCALE: f32 = 1.4;
+const MIN_BRIGHTNESS: f32 = 0.1;
+const MAX_BRIGHTNESS: f32 = 1.0;
+const DEFAULT_FILL_START_PERCENT: f32 = 65.0;
+const DEFAULT_FILL_END_PERCENT: f32 = 93.0;
+const MIN_FILL_START_PERCENT: f32 = 40.0;
+const MAX_FILL_START_PERCENT: f32 = 80.0;
+const MIN_FILL_END_PERCENT: f32 = 85.0;
+const MAX_FILL_END_PERCENT: f32 = 95.0;
+const LED_COUNT: usize = 15;
 
 /// Serial connection state for a Moza wheel/base.
 ///
@@ -70,6 +85,64 @@ const MENU_BUTTON_REFRESH_INTERVAL: Duration = Duration::from_millis(1500);
 struct MozaSerial {
     port: Box<dyn serialport::SerialPort>,
     flash_start: Option<Instant>,
+}
+
+#[derive(Clone, Copy, Debug)]
+struct RuntimeControl {
+    rpm_scale: f32,
+    brightness: f32,
+    fill_start_percent: f32,
+    fill_end_percent: f32,
+    override_rpm_colors: bool,
+    enable_button_overrides: bool,
+    force_button_colors: bool,
+    menu_force_button_colors: bool,
+    idle_led_writes: bool,
+}
+
+impl RuntimeControl {
+    fn from_env_defaults() -> Self {
+        Self {
+            rpm_scale: read_env_f32("MOZA_RPM_SCALE", DEFAULT_RPM_SCALE, MIN_RPM_SCALE, MAX_RPM_SCALE),
+            brightness: read_env_f32("MOZA_RPM_BRIGHTNESS", DEFAULT_BRIGHTNESS, MIN_BRIGHTNESS, MAX_BRIGHTNESS),
+            fill_start_percent: read_env_f32(
+                "MOZA_RPM_FILL_START",
+                DEFAULT_FILL_START_PERCENT,
+                MIN_FILL_START_PERCENT,
+                MAX_FILL_START_PERCENT,
+            ),
+            fill_end_percent: read_env_f32(
+                "MOZA_RPM_FILL_END",
+                DEFAULT_FILL_END_PERCENT,
+                MIN_FILL_END_PERCENT,
+                MAX_FILL_END_PERCENT,
+            ),
+            override_rpm_colors: env_flag("MOZA_FORCE_RPM_COLORS"),
+            enable_button_overrides: env_flag("MOZA_ENABLE_BUTTON_COLOR_OVERRIDES"),
+            force_button_colors: env_flag("MOZA_FORCE_BUTTON_COLORS"),
+            menu_force_button_colors: env_flag("MOZA_MENU_FORCE_BUTTON_COLORS"),
+            idle_led_writes: env_flag("MOZA_IDLE_LED_WRITES"),
+        }
+    }
+
+    fn sanitize(mut self) -> Self {
+        self.fill_start_percent = clamp_f32(self.fill_start_percent, MIN_FILL_START_PERCENT, MAX_FILL_START_PERCENT);
+        self.fill_end_percent = clamp_f32(self.fill_end_percent, MIN_FILL_END_PERCENT, MAX_FILL_END_PERCENT);
+        if self.fill_end_percent <= self.fill_start_percent + 1.0 {
+            self.fill_end_percent = (self.fill_start_percent + 1.0).min(MAX_FILL_END_PERCENT);
+        }
+        if !self.enable_button_overrides {
+            self.force_button_colors = false;
+            self.menu_force_button_colors = false;
+        }
+        self
+    }
+}
+
+struct RuntimeControlFile {
+    path: PathBuf,
+    last_poll: Instant,
+    last_modified: Option<SystemTime>,
 }
 
 /// Wrapper around LMU shared-memory mapping resources.
@@ -226,6 +299,122 @@ impl Drop for LmuSharedMemory {
     }
 }
 
+fn clamp_f32(value: f32, min_value: f32, max_value: f32) -> f32 {
+    value.max(min_value).min(max_value)
+}
+
+fn read_env_f32(name: &str, default: f32, min_value: f32, max_value: f32) -> f32 {
+    std::env::var(name)
+        .ok()
+        .and_then(|raw| raw.trim().parse::<f32>().ok())
+        .map(|value| clamp_f32(value, min_value, max_value))
+        .unwrap_or(default)
+}
+
+fn scaled_rgb(value: u8, brightness: f32) -> u8 {
+    let scaled = (value as f32 * clamp_f32(brightness, MIN_BRIGHTNESS, MAX_BRIGHTNESS)).round();
+    scaled.max(0.0).min(255.0) as u8
+}
+
+fn apply_brightness_to_color_payload(payload: &mut [u8], brightness: f32) {
+    if payload.len() < 9 {
+        return;
+    }
+
+    let mut i = 7;
+    while i + 2 < payload.len() - 1 {
+        payload[i] = scaled_rgb(payload[i], brightness);
+        payload[i + 1] = scaled_rgb(payload[i + 1], brightness);
+        payload[i + 2] = scaled_rgb(payload[i + 2], brightness);
+        i += 4;
+    }
+}
+
+fn parse_runtime_control(path: &PathBuf, defaults: RuntimeControl) -> RuntimeControl {
+    let mut control = defaults;
+
+    if let Ok(raw) = std::fs::read_to_string(path) {
+        for line in raw.lines() {
+            let trimmed = line.trim();
+            if trimmed.is_empty() || trimmed.starts_with('#') {
+                continue;
+            }
+
+            let Some((key, value)) = trimmed.split_once('=') else {
+                continue;
+            };
+
+            let key = key.trim().to_ascii_uppercase();
+            let value = value.trim();
+
+            if key == "RPM_SCALE" {
+                if let Ok(parsed) = value.parse::<f32>() {
+                    control.rpm_scale = clamp_f32(parsed, MIN_RPM_SCALE, MAX_RPM_SCALE);
+                }
+            } else if key == "BRIGHTNESS" {
+                if let Ok(parsed) = value.parse::<f32>() {
+                    control.brightness = clamp_f32(parsed, MIN_BRIGHTNESS, MAX_BRIGHTNESS);
+                }
+            } else if key == "FILL_START_PERCENT" {
+                if let Ok(parsed) = value.parse::<f32>() {
+                    control.fill_start_percent = clamp_f32(parsed, MIN_FILL_START_PERCENT, MAX_FILL_START_PERCENT);
+                }
+            } else if key == "FILL_END_PERCENT" {
+                if let Ok(parsed) = value.parse::<f32>() {
+                    control.fill_end_percent = clamp_f32(parsed, MIN_FILL_END_PERCENT, MAX_FILL_END_PERCENT);
+                }
+            } else if key == "OVERRIDE_RPM_COLORS" {
+                control.override_rpm_colors = parse_bool_like(value, control.override_rpm_colors);
+            } else if key == "ENABLE_BUTTON_OVERRIDES" {
+                control.enable_button_overrides = parse_bool_like(value, control.enable_button_overrides);
+            } else if key == "FORCE_BUTTON_COLORS" {
+                control.force_button_colors = parse_bool_like(value, control.force_button_colors);
+            } else if key == "MENU_FORCE_BUTTON_COLORS" {
+                control.menu_force_button_colors = parse_bool_like(value, control.menu_force_button_colors);
+            } else if key == "IDLE_LED_WRITES" {
+                control.idle_led_writes = parse_bool_like(value, control.idle_led_writes);
+            }
+        }
+    }
+
+    control.sanitize()
+}
+
+fn parse_bool_like(value: &str, fallback: bool) -> bool {
+    match value.trim().to_ascii_lowercase().as_str() {
+        "1" | "true" | "yes" | "on" => true,
+        "0" | "false" | "no" | "off" => false,
+        _ => fallback,
+    }
+}
+
+impl RuntimeControlFile {
+    fn new(path: PathBuf) -> Self {
+        Self {
+            path,
+            last_poll: Instant::now() - CONTROL_POLL_INTERVAL,
+            last_modified: None,
+        }
+    }
+
+    fn poll(&mut self, defaults: RuntimeControl) -> Option<RuntimeControl> {
+        if self.last_poll.elapsed() < CONTROL_POLL_INTERVAL {
+            return None;
+        }
+        self.last_poll = Instant::now();
+
+        let metadata = metadata(&self.path).ok()?;
+        let modified = metadata.modified().ok()?;
+
+        if self.last_modified.as_ref() == Some(&modified) {
+            return None;
+        }
+        self.last_modified = Some(modified);
+
+        Some(parse_runtime_control(&self.path, defaults))
+    }
+}
+
 impl MozaSerial {
     /// Computes Moza packet checksum using the protocol's additive scheme.
     ///
@@ -247,55 +436,51 @@ impl MozaSerial {
     /// Builds and sends an RPM LED bitmask update for the given percent.
     ///
     /// The mask progressively enables LEDs from approximately 65% to 93% RPM.
-    fn send_rpm_telemetry_command(&mut self, percent: u8) -> std::io::Result<()> {
+    fn send_rpm_telemetry_command(&mut self, percent: u8, fill_start_percent: f32, fill_end_percent: f32) -> std::io::Result<()> {
         let mut packet = RPM_MASK_TEMPLATE.to_vec();
-        if percent >= 65 {
-            packet[6] |= 1u8 << 0;
+
+        let start = clamp_f32(fill_start_percent, MIN_FILL_START_PERCENT, MAX_FILL_START_PERCENT);
+        let end = clamp_f32(fill_end_percent.max(start + 1.0), MIN_FILL_END_PERCENT, MAX_FILL_END_PERCENT);
+        let step = (end - start) / ((LED_COUNT - 1) as f32);
+        let percent_f = percent as f32;
+
+        for led_idx in 0..LED_COUNT {
+            let threshold = start + step * (led_idx as f32);
+            if percent_f < threshold {
+                continue;
+            }
+
+            if led_idx < 8 {
+                packet[6] |= 1u8 << led_idx;
+            } else {
+                packet[7] |= 1u8 << (led_idx - 8);
+            }
         }
-        if percent >= 67 {
-            packet[6] |= 1u8 << 1;
-        }
-        if percent >= 69 {
-            packet[6] |= 1u8 << 2;
-        }
-        if percent >= 71 {
-            packet[6] |= 1u8 << 3;
-        }
-        if percent >= 73 {
-            packet[6] |= 1u8 << 4;
-        }
-        if percent >= 75 {
-            packet[6] |= 1u8 << 5;
-        }
-        if percent >= 77 {
-            packet[6] |= 1u8 << 6;
-        }
-        if percent >= 79 {
-            packet[6] |= 1u8 << 7;
-        }
-        if percent >= 81 {
-            packet[7] |= 1u8 << 0;
-        }
-        if percent >= 83 {
-            packet[7] |= 1u8 << 1;
-        }
-        if percent >= 85 {
-            packet[7] |= 1u8 << 2;
-        }
-        if percent >= 87 {
-            packet[7] |= 1u8 << 3;
-        }
-        if percent >= 89 {
-            packet[7] |= 1u8 << 4;
-        }
-        if percent >= 91 {
-            packet[7] |= 1u8 << 5;
-        }
-        if percent >= 93 {
-            packet[7] |= 1u8 << 6;
-        }
+
         packet[10] = Self::checksum(&packet[..10]);
         self.send_packet(&packet)
+    }
+
+    fn send_rpm_color_configuration(&mut self, brightness: f32) -> std::io::Result<()> {
+        let mut p1 = RPM_COLOR_PAYLOAD_1.to_vec();
+        let mut p2 = RPM_COLOR_PAYLOAD_2.to_vec();
+        let mut p3 = RPM_COLOR_PAYLOAD_3.to_vec();
+
+        apply_brightness_to_color_payload(&mut p1, brightness);
+        apply_brightness_to_color_payload(&mut p2, brightness);
+        apply_brightness_to_color_payload(&mut p3, brightness);
+
+        let end1 = p1.len() - 1;
+        p1[end1] = Self::checksum(&p1[..end1]);
+        let end2 = p2.len() - 1;
+        p2[end2] = Self::checksum(&p2[..end2]);
+        let end3 = p3.len() - 1;
+        p3[end3] = Self::checksum(&p3[..end3]);
+
+        self.send_packet(&p1)?;
+        self.send_packet(&p2)?;
+        self.send_packet(&p3)?;
+        Ok(())
     }
 
     /// Opens the Moza serial device on `COM1` at 115200 baud.
@@ -310,27 +495,15 @@ impl MozaSerial {
     ///
     /// Color payloads are checksummed and transmitted only for the groups whose
     /// `force_*_colors` flag is enabled.
-    pub fn initialize(&mut self, force_rpm_colors: bool, force_button_colors: bool) -> std::io::Result<()> {
+    pub fn initialize(&mut self, force_rpm_colors: bool, force_button_colors: bool, brightness: f32) -> std::io::Result<()> {
         sleep(Duration::from_millis(250));
 
-        let mut p1 = RPM_COLOR_PAYLOAD_1.to_vec();
-        let mut p2 = RPM_COLOR_PAYLOAD_2.to_vec();
-        let mut p3 = RPM_COLOR_PAYLOAD_3.to_vec();
         let mut p4 = BTN_COLOR_PAYLOAD_1.to_vec();
         let mut p5 = BTN_COLOR_PAYLOAD_2.to_vec();
         let mut p6 = BTN_COLOR_PAYLOAD_3.to_vec();
 
         if force_rpm_colors {
-            let end1 = p1.len() - 1;
-            p1[end1] = Self::checksum(&p1[..end1]);
-            let end2 = p2.len() - 1;
-            p2[end2] = Self::checksum(&p2[..end2]);
-            let end3 = p3.len() - 1;
-            p3[end3] = Self::checksum(&p3[..end3]);
-
-            self.send_packet(&p1)?;
-            self.send_packet(&p2)?;
-            self.send_packet(&p3)?;
+            self.send_rpm_color_configuration(brightness)?;
         }
 
         if force_button_colors {
@@ -375,7 +548,7 @@ impl MozaSerial {
     ///
     /// When in the flashing zone, output alternates between the real value and
     /// zero on a timed cadence to create a shift-light blink.
-    pub fn update_rpm_telemetry(&mut self, actual_percent: u8) -> std::io::Result<()> {
+    pub fn update_rpm_telemetry(&mut self, actual_percent: u8, fill_start_percent: f32, fill_end_percent: f32) -> std::io::Result<()> {
         let mut percent = actual_percent;
         if percent > LED_FLASH_THRESHOLD {
             match self.flash_start {
@@ -393,7 +566,7 @@ impl MozaSerial {
             self.flash_start = None;
         }
 
-        self.send_rpm_telemetry_command(percent)
+        self.send_rpm_telemetry_command(percent, fill_start_percent, fill_end_percent)
     }
 }
 
@@ -421,12 +594,16 @@ fn env_flag(name: &str) -> bool {
 #[tokio::main]
 async fn main() {
     let debug = env_flag("MOZA_RPM_DEBUG");
-    let force_rpm_colors = env_flag("MOZA_FORCE_RPM_COLORS");
-    let enable_button_color_overrides = env_flag("MOZA_ENABLE_BUTTON_COLOR_OVERRIDES");
-    let force_button_colors = enable_button_color_overrides && env_flag("MOZA_FORCE_BUTTON_COLORS");
-    let menu_force_button_colors = enable_button_color_overrides && env_flag("MOZA_MENU_FORCE_BUTTON_COLORS");
-    let idle_led_writes = env_flag("MOZA_IDLE_LED_WRITES");
     let sample_log_interval = Duration::from_millis(read_env_u64_ms("MOZA_RPM_SAMPLE_LOG_INTERVAL_MS", 2000));
+    let default_control = RuntimeControl::from_env_defaults().sanitize();
+    let control_file_path = std::env::var("MOZA_CONTROL_FILE")
+        .map(PathBuf::from)
+        .unwrap_or_else(|_| PathBuf::from("moza-rpm-control.env"));
+    let mut control_file = RuntimeControlFile::new(control_file_path);
+    let mut control = default_control;
+    if let Some(from_file) = control_file.poll(default_control) {
+        control = from_file;
+    }
     if debug {
         panic::set_hook(Box::new(|info| {
             if let Ok(mut file) = OpenOptions::new().create(true).append(true).open("moza-rpm-debug.log") {
@@ -457,18 +634,49 @@ async fn main() {
     }
 
     let (tx, mut rx) = watch::channel(0u8);
+    let (control_tx, mut control_rx) = watch::channel(control);
 
     let mut moza = MozaSerial::create().expect("Failed to open port");
-    moza.initialize(force_rpm_colors, force_button_colors).expect("Failed to initialize");
+    moza
+        .initialize(control.override_rpm_colors, control.force_button_colors, control.brightness)
+        .expect("Failed to initialize");
 
     tokio::spawn(async move {
         let mut last_button_refresh = Instant::now() - MENU_BUTTON_REFRESH_INTERVAL;
-        let mut menu_refresh_enabled = menu_force_button_colors;
+        let mut telemetry_seen = false;
+        let mut active_control = *control_rx.borrow();
+        let mut menu_refresh_enabled = !telemetry_seen
+            && active_control.enable_button_overrides
+            && active_control.menu_force_button_colors;
+
         loop {
+            if let Ok(true) = control_rx.has_changed() {
+                active_control = *control_rx.borrow_and_update();
+                menu_refresh_enabled = !telemetry_seen
+                    && active_control.enable_button_overrides
+                    && active_control.menu_force_button_colors;
+
+                if active_control.override_rpm_colors {
+                    moza
+                        .send_rpm_color_configuration(active_control.brightness)
+                        .expect("Failed to apply RPM brightness");
+                }
+
+                if active_control.enable_button_overrides && active_control.force_button_colors {
+                    moza.refresh_button_colors().expect("Failed to refresh button colors");
+                }
+            }
+
             match timeout(Duration::from_millis(100), rx.changed()).await {
                 Err(_) => {
-                    if idle_led_writes {
-                        moza.send_rpm_telemetry_command(0x03).expect("Failed to send telemetry");
+                    if active_control.idle_led_writes {
+                        moza
+                            .send_rpm_telemetry_command(
+                                0x03,
+                                active_control.fill_start_percent,
+                                active_control.fill_end_percent,
+                            )
+                            .expect("Failed to send telemetry");
                     }
                     if menu_refresh_enabled && last_button_refresh.elapsed() >= MENU_BUTTON_REFRESH_INTERVAL {
                         moza.refresh_button_colors().expect("Failed to refresh button colors");
@@ -476,7 +684,14 @@ async fn main() {
                     }
                 },
                 Ok(_) => {
-                    moza.update_rpm_telemetry(*rx.borrow_and_update()).expect("Failed to send telemetry");
+                    telemetry_seen = true;
+                    moza
+                        .update_rpm_telemetry(
+                            *rx.borrow_and_update(),
+                            active_control.fill_start_percent,
+                            active_control.fill_end_percent,
+                        )
+                        .expect("Failed to send telemetry");
 
                     // Once live telemetry is flowing, stop menu refresh writes so wheel profile
                     // button colors are no longer overridden while on track.
@@ -507,7 +722,16 @@ async fn main() {
             while let Some(state) = client.next_sim_state().await {
                 let rpm = state.rpm() as f64;
                 let max_rpm = state.max_rpm() as f64;
-                let percent = if max_rpm > 0.0 { (100.0 * rpm / max_rpm) as u8 } else { 0 };
+                if let Some(updated) = control_file.poll(default_control) {
+                    control = updated;
+                    let _ = control_tx.send(control);
+                }
+                let percent = if max_rpm > 0.0 {
+                    let raw_percent = 100.0 * rpm / max_rpm;
+                    clamp_f32((raw_percent as f32) * control.rpm_scale, 0.0, 100.0) as u8
+                } else {
+                    0
+                };
                 if !saw_rpm_sample {
                     println!("RPM telemetry active.");
                     log_debug("RPM telemetry active.");
@@ -542,7 +766,16 @@ async fn main() {
                     log_debug("Connected to LMU native shared memory!");
                     loop {
                         if let Some((rpm, max_rpm)) = shared_mem.read_player_rpm() {
-                            let percent = if max_rpm > 0.0 { (100.0 * rpm / max_rpm) as u8 } else { 0 };
+                            if let Some(updated) = control_file.poll(default_control) {
+                                control = updated;
+                                let _ = control_tx.send(control);
+                            }
+                            let percent = if max_rpm > 0.0 {
+                                let raw_percent = 100.0 * rpm / max_rpm;
+                                clamp_f32((raw_percent as f32) * control.rpm_scale, 0.0, 100.0) as u8
+                            } else {
+                                0
+                            };
                             if !saw_rpm_sample {
                                 println!("RPM telemetry active.");
                                 log_debug("RPM telemetry active.");

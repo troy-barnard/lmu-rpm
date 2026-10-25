@@ -10,6 +10,7 @@ LOG_FILE="$ROOT_DIR/moza-rpm-launch.log"
 STATUS_LOG_FILE="$ROOT_DIR/moza-rpm-status.log"
 STATUS_GUI_ERROR_LOG="$ROOT_DIR/moza-rpm-status-gui.log"
 STATUS_GUI_PY="$ROOT_DIR/scripts/status-gui.py"
+CONTROL_FILE="$ROOT_DIR/moza-rpm-control.env"
 
 # Load configuration from secrets.json
 source "$SCRIPT_DIR/read-secrets.sh" 2>/dev/null || {
@@ -34,6 +35,10 @@ FORCE_BUTTON_COLORS_ON_BOOT="${MOZA_FORCE_BUTTON_COLORS:-0}"
 MENU_FORCE_BUTTON_COLORS_ON_IDLE="${MOZA_MENU_FORCE_BUTTON_COLORS:-0}"
 IDLE_LED_WRITES="${MOZA_IDLE_LED_WRITES:-0}"
 ENABLE_BUTTON_COLOR_OVERRIDES="${MOZA_ENABLE_BUTTON_COLOR_OVERRIDES:-0}"
+RPM_SCALE_DEFAULT="${MOZA_RPM_SCALE:-1.00}"
+RPM_BRIGHTNESS_DEFAULT="${MOZA_RPM_BRIGHTNESS:-1.00}"
+RPM_FILL_START_DEFAULT="${MOZA_RPM_FILL_START:-65.0}"
+RPM_FILL_END_DEFAULT="${MOZA_RPM_FILL_END:-93.0}"
 
 if [ $# -eq 0 ]; then
   echo "No LMU launch command was provided." >&2
@@ -78,7 +83,7 @@ start_status_gui() {
   : >"$STATUS_GUI_ERROR_LOG"
 
   if command -v python3 >/dev/null 2>&1 && [ -f "$STATUS_GUI_PY" ]; then
-    setsid python3 "$STATUS_GUI_PY" "$STATUS_LOG_FILE" >>"$STATUS_GUI_ERROR_LOG" 2>&1 &
+    setsid python3 "$STATUS_GUI_PY" "$STATUS_LOG_FILE" "$CONTROL_FILE" >>"$STATUS_GUI_ERROR_LOG" 2>&1 &
   elif command -v zenity >/dev/null 2>&1; then
     # Fallback path if Python/Tk is not available.
     setsid bash -c "tail -n +1 -f '$STATUS_LOG_FILE' | zenity --title='LMU RPM Bridge Status' --text-info" >>"$STATUS_GUI_ERROR_LOG" 2>&1 &
@@ -95,6 +100,89 @@ start_status_gui() {
   else
     status_line "ERROR" "Status window failed to start. Check moza-rpm-status-gui.log."
   fi
+}
+
+initialize_control_file() {
+  if [ -f "$CONTROL_FILE" ]; then
+    return
+  fi
+
+  {
+    printf 'RPM_SCALE=%s\n' "$RPM_SCALE_DEFAULT"
+    printf 'BRIGHTNESS=%s\n' "$RPM_BRIGHTNESS_DEFAULT"
+    printf 'FILL_START_PERCENT=%s\n' "$RPM_FILL_START_DEFAULT"
+    printf 'FILL_END_PERCENT=%s\n' "$RPM_FILL_END_DEFAULT"
+    printf 'OVERRIDE_RPM_COLORS=%s\n' "$FORCE_RPM_COLORS_ON_BOOT"
+    printf 'ENABLE_BUTTON_OVERRIDES=%s\n' "$ENABLE_BUTTON_COLOR_OVERRIDES"
+    printf 'FORCE_BUTTON_COLORS=%s\n' "$FORCE_BUTTON_COLORS_ON_BOOT"
+    printf 'MENU_FORCE_BUTTON_COLORS=%s\n' "$MENU_FORCE_BUTTON_COLORS_ON_IDLE"
+    printf 'IDLE_LED_WRITES=%s\n' "$IDLE_LED_WRITES"
+  } >"$CONTROL_FILE"
+}
+
+normalize_bool() {
+  local raw="${1:-}"
+  local fallback="${2:-0}"
+
+  case "${raw,,}" in
+    1|true|yes|on)
+      echo "1"
+      ;;
+    0|false|no|off)
+      echo "0"
+      ;;
+    *)
+      echo "$fallback"
+      ;;
+  esac
+}
+
+load_control_file_overrides() {
+  if [ ! -f "$CONTROL_FILE" ]; then
+    return
+  fi
+
+  while IFS='=' read -r raw_key raw_value || [ -n "${raw_key:-}" ]; do
+    local key value
+    key="${raw_key#${raw_key%%[![:space:]]*}}"
+    key="${key%${key##*[![:space:]]}}"
+    value="${raw_value#${raw_value%%[![:space:]]*}}"
+    value="${value%${value##*[![:space:]]}}"
+
+    if [ -z "$key" ] || [[ "$key" = \#* ]]; then
+      continue
+    fi
+
+    case "$key" in
+      RPM_SCALE)
+        RPM_SCALE_DEFAULT="$value"
+        ;;
+      BRIGHTNESS)
+        RPM_BRIGHTNESS_DEFAULT="$value"
+        ;;
+      FILL_START_PERCENT)
+        RPM_FILL_START_DEFAULT="$value"
+        ;;
+      FILL_END_PERCENT)
+        RPM_FILL_END_DEFAULT="$value"
+        ;;
+      OVERRIDE_RPM_COLORS)
+        FORCE_RPM_COLORS_ON_BOOT="$(normalize_bool "$value" "$FORCE_RPM_COLORS_ON_BOOT")"
+        ;;
+      ENABLE_BUTTON_OVERRIDES)
+        ENABLE_BUTTON_COLOR_OVERRIDES="$(normalize_bool "$value" "$ENABLE_BUTTON_COLOR_OVERRIDES")"
+        ;;
+      FORCE_BUTTON_COLORS)
+        FORCE_BUTTON_COLORS_ON_BOOT="$(normalize_bool "$value" "$FORCE_BUTTON_COLORS_ON_BOOT")"
+        ;;
+      MENU_FORCE_BUTTON_COLORS)
+        MENU_FORCE_BUTTON_COLORS_ON_IDLE="$(normalize_bool "$value" "$MENU_FORCE_BUTTON_COLORS_ON_IDLE")"
+        ;;
+      IDLE_LED_WRITES)
+        IDLE_LED_WRITES="$(normalize_bool "$value" "$IDLE_LED_WRITES")"
+        ;;
+    esac
+  done <"$CONTROL_FILE"
 }
 
 cleanup() {
@@ -131,7 +219,7 @@ is_lmu_process_visible() {
 start_bridge_process() {
   BRIDGE_LOG_OFFSET=$(wc -c <"$LOG_FILE" 2>/dev/null || echo 0)
   BRIDGE_STATUS_OFFSET=$BRIDGE_LOG_OFFSET
-  setsid bash -c "sleep '$START_DELAY'; STEAM_APP_ID='$APP_ID' MOZA_FORCE_RPM_COLORS='$FORCE_RPM_COLORS_ON_BOOT' MOZA_FORCE_BUTTON_COLORS='$FORCE_BUTTON_COLORS_ON_BOOT' MOZA_MENU_FORCE_BUTTON_COLORS='$MENU_FORCE_BUTTON_COLORS_ON_IDLE' MOZA_IDLE_LED_WRITES='$IDLE_LED_WRITES' MOZA_ENABLE_BUTTON_COLOR_OVERRIDES='$ENABLE_BUTTON_COLOR_OVERRIDES' '$BRIDGE_SCRIPT' >>'$LOG_FILE' 2>&1" &
+  setsid bash -c "sleep '$START_DELAY'; STEAM_APP_ID='$APP_ID' MOZA_FORCE_RPM_COLORS='$FORCE_RPM_COLORS_ON_BOOT' MOZA_FORCE_BUTTON_COLORS='$FORCE_BUTTON_COLORS_ON_BOOT' MOZA_MENU_FORCE_BUTTON_COLORS='$MENU_FORCE_BUTTON_COLORS_ON_IDLE' MOZA_IDLE_LED_WRITES='$IDLE_LED_WRITES' MOZA_ENABLE_BUTTON_COLOR_OVERRIDES='$ENABLE_BUTTON_COLOR_OVERRIDES' MOZA_RPM_SCALE='$RPM_SCALE_DEFAULT' MOZA_RPM_BRIGHTNESS='$RPM_BRIGHTNESS_DEFAULT' MOZA_RPM_FILL_START='$RPM_FILL_START_DEFAULT' MOZA_RPM_FILL_END='$RPM_FILL_END_DEFAULT' MOZA_CONTROL_FILE='$CONTROL_FILE' '$BRIDGE_SCRIPT' >>'$LOG_FILE' 2>&1" &
   BRIDGE_PID=$!
   status_line "INFO" "Bridge process group started (PID $BRIDGE_PID)."
 }
@@ -200,9 +288,12 @@ pump_bridge_status_from_log() {
 }
 
 : >"$STATUS_LOG_FILE"
+initialize_control_file
+load_control_file_overrides
 status_line "INFO" "Launcher started (APP_ID=$APP_ID, bridge delay=${START_DELAY}s)."
 status_line "INFO" "LMU launch command: $*"
 status_line "INFO" "LED config: force_rpm_colors=$FORCE_RPM_COLORS_ON_BOOT force_button_colors=$FORCE_BUTTON_COLORS_ON_BOOT menu_force_button_colors=$MENU_FORCE_BUTTON_COLORS_ON_IDLE idle_led_writes=$IDLE_LED_WRITES enable_button_color_overrides=$ENABLE_BUTTON_COLOR_OVERRIDES"
+status_line "INFO" "Control defaults: rpm_scale=$RPM_SCALE_DEFAULT brightness=$RPM_BRIGHTNESS_DEFAULT fill_start=$RPM_FILL_START_DEFAULT fill_end=$RPM_FILL_END_DEFAULT control_file=$CONTROL_FILE"
 
 if [ "$AUTO_RESET_ON_LAUNCH" = "1" ]; then
   status_line "INFO" "Running runtime reset preflight."

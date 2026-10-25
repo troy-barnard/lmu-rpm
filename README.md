@@ -138,6 +138,10 @@ Optional environment variables:
 - `MOZA_BRIDGE_RESTART_ON_CONNECT_FAIL=1` (default; auto-restart bridge once if telemetry connection fails)
 - `MOZA_REQUIRE_RPM_SAMPLE=1` (default; require real RPM sample before declaring bridge healthy)
 - `MOZA_REQUIRE_RPM_SAMPLE=0` (fallback; treat shared-memory open as healthy)
+- `MOZA_RPM_SCALE=1.00` (default; multiplies RPM percentage before LED mapping)
+- `MOZA_RPM_BRIGHTNESS=1.00` (default; scales RPM color payload brightness)
+- `MOZA_RPM_FILL_START=65.0` (default; RPM percent where the first shift LED turns on)
+- `MOZA_RPM_FILL_END=93.0` (default; RPM percent where the last non-flash shift LED turns on)
 - `MOZA_FORCE_RPM_COLORS=1` (default from launcher; ensures RPM LED colors are initialized each launch)
 - `MOZA_FORCE_RPM_COLORS=0` (disable forced RPM color initialization)
 - `MOZA_FORCE_BUTTON_COLORS=0` (default from launcher; preserve wheel profile button backlights)
@@ -150,6 +154,21 @@ Optional environment variables:
 
 The wrapper logs bridge output to `moza-rpm-launch.log` in the project directory.
 The wrapper also writes live status updates to `moza-rpm-status.log`.
+The GUI writes persistent controls to `moza-rpm-control.env`.
+
+When status GUI is enabled, changing sliders/toggles updates `moza-rpm-control.env` and those values are reused automatically on the next launch.
+
+Saved control keys:
+
+- `RPM_SCALE`
+- `BRIGHTNESS`
+- `FILL_START_PERCENT`
+- `FILL_END_PERCENT`
+- `OVERRIDE_RPM_COLORS`
+- `ENABLE_BUTTON_OVERRIDES`
+- `FORCE_BUTTON_COLORS`
+- `MENU_FORCE_BUTTON_COLORS`
+- `IDLE_LED_WRITES`
 
 Status window severity colors:
 
