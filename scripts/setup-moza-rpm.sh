@@ -10,9 +10,12 @@ source "$SCRIPT_DIR/read-secrets.sh" 2>/dev/null || {
   exit 1
 }
 
-# Allow override via environment variable
+# Allow override via environment variable. This script is usually run before LMU starts,
+# but it can also be invoked manually when testing a new Proton runtime or COM1 mapping.
 APP_ID="${STEAM_APP_ID:-$STEAM_APP_ID}"
 
+# The wheel base is presented by Linux as a serial device. We discover it here and map
+# it into the Proton prefix so the Windows bridge can talk to COM1 as if it were the Moza.
 DEVICE=""
 
 resolve_proton_bin() {
@@ -53,6 +56,7 @@ resolve_wine_tools() {
 
   printf '%s\n%s\n' "$wine_bin" "$wineserver_bin"
 }
+# Prefer the stable USB serial ID if present; otherwise fall back to any ACM device.
 for candidate in /dev/serial/by-id/usb-Gudsen_MOZA_R9_Base_* /dev/ttyACM*; do
   if [ -e "$candidate" ]; then
     DEVICE="$(readlink -f "$candidate")"
@@ -67,6 +71,8 @@ fi
 
 echo "Using device: $DEVICE"
 
+# Create a stable device alias so the Proton prefix and the Linux-side scripts do not
+# depend on a moving ttyACM path when the wheel reconnects or the kernel renames devices.
 SYMLINK_CREATED=0
 if ln -sfn "$DEVICE" /dev/moza-r9 2>/dev/null; then
   SYMLINK_CREATED=1

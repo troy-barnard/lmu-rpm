@@ -87,12 +87,14 @@ resolve_wineserver() {
   echo ""
 }
 
+# Reset the Proton runtime before a fresh LMU launch so stale bridge processes and lock
+# files do not cause the usual first-launch failure.
 echo "[reset-runtime] Stopping stale LMU and bridge processes for app ${APP_ID}..."
 
 # Stop known bridge and game-side processes. Avoid broad SteamLaunch matches that can hit the current wrapper.
 pkill -f "run-moza-rpm\.sh|moza-rpm\.exe|proton.*moza-rpm|Le Mans Ultimate\.exe|LeMansUltimate\.exe|start_protected_game\.exe" >/dev/null 2>&1 || true
 
-# Kill wineserver for the LMU prefix to fully release locks.
+# Kill wineserver for the LMU prefix to fully release locks after a previous failed launch.
 PREFIX="$(resolve_prefix)"
 WINESERVER_BIN="$(resolve_wineserver)"
 if [ -n "$PREFIX" ] && [ -n "$WINESERVER_BIN" ] && [ -x "$WINESERVER_BIN" ]; then

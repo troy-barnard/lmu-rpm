@@ -5,6 +5,8 @@ import sys
 import tkinter as tk
 from tkinter import ttk
 
+from brake_overlay import BrakeGraphOverlay
+
 LOG_LINE_RE = re.compile(r"^\[(?P<time>[^\]]+)\]\s+\[(?P<level>[A-Z]+)\]\s+(?P<msg>.*)$")
 LEGACY_LINE_RE = re.compile(r"^\[(?P<time>[^\]]+)\]\s+(?P<msg>.*)$")
 
@@ -37,9 +39,12 @@ DEFAULT_ENABLE_BUTTON_OVERRIDES = 0
 DEFAULT_FORCE_BUTTON_COLORS = 0
 DEFAULT_MENU_FORCE_BUTTON_COLORS = 0
 DEFAULT_IDLE_LED_WRITES = 0
+DEFAULT_BRAKE_OVERLAY = 1
 
 
 def parse_line(raw: str):
+    # The launcher writes a consistent status format, but older log entries may only have
+    # a timestamp and message. Accept both forms so the GUI remains useful during upgrades.
     m = LOG_LINE_RE.match(raw)
     if m:
         return m.group("time"), m.group("level"), m.group("msg")
@@ -56,6 +61,8 @@ def clamp(value: float, min_value: float, max_value: float) -> float:
 
 
 def parse_bool(raw: str, fallback: int) -> int:
+    # Treat the common on/off strings the same way the bridge does so the GUI and launcher
+    # stay in sync when users toggle settings from the live control panel.
     value = raw.strip().lower()
     if value in {"1", "true", "yes", "on"}:
         return 1
@@ -74,6 +81,7 @@ def parse_control_file(control_path: str):
     force_button_colors = DEFAULT_FORCE_BUTTON_COLORS
     menu_force_button_colors = DEFAULT_MENU_FORCE_BUTTON_COLORS
     idle_led_writes = DEFAULT_IDLE_LED_WRITES
+    brake_overlay = DEFAULT_BRAKE_OVERLAY
 
     try:
         with open(control_path, "r", encoding="utf-8", errors="replace") as f:
@@ -108,6 +116,8 @@ def parse_control_file(control_path: str):
                     menu_force_button_colors = parse_bool(value, menu_force_button_colors)
                 elif key == "IDLE_LED_WRITES":
                     idle_led_writes = parse_bool(value, idle_led_writes)
+                elif key == "BRAKE_OVERLAY":
+                    brake_overlay = parse_bool(value, brake_overlay)
     except OSError:
         pass
 
@@ -121,10 +131,13 @@ def parse_control_file(control_path: str):
         "force_button_colors": force_button_colors,
         "menu_force_button_colors": menu_force_button_colors,
         "idle_led_writes": idle_led_writes,
+        "brake_overlay": brake_overlay,
     }
 
 
 class StatusGui:
+    # The live status window exposes the same runtime controls that the bridge reads from the
+    # control file, keeping the UI and launcher settings aligned without a restart.
     def __init__(self, log_path: str, control_path: str):
         self.log_path = log_path
         self.control_path = control_path
@@ -135,6 +148,8 @@ class StatusGui:
         self.root.title("LMU RPM Bridge Status")
         self.root.geometry("860x500")
         self.root.configure(bg=BG)
+
+        self.brake_overlay = BrakeGraphOverlay(self.root)
 
         container = ttk.Frame(self.root)
         container.pack(fill="both", expand=True)
@@ -155,6 +170,7 @@ class StatusGui:
         self.force_button_colors_var = tk.IntVar(value=DEFAULT_FORCE_BUTTON_COLORS)
         self.menu_force_button_colors_var = tk.IntVar(value=DEFAULT_MENU_FORCE_BUTTON_COLORS)
         self.idle_led_writes_var = tk.IntVar(value=DEFAULT_IDLE_LED_WRITES)
+        self.brake_overlay_var = tk.IntVar(value=DEFAULT_BRAKE_OVERLAY)
 
         self.rpm_scale_entry = ttk.Entry(controls, width=7, justify="right", textvariable=self.rpm_scale_entry_var)
         self.brightness_entry = ttk.Entry(controls, width=7, justify="right", textvariable=self.brightness_entry_var)
@@ -220,6 +236,13 @@ class StatusGui:
             command=self.on_control_toggle,
         ).grid(row=2, column=0, columnspan=2, sticky="w", pady=(4, 0))
 
+        ttk.Checkbutton(
+            controls,
+            text="Brake overlay",
+            variable=self.brake_overlay_var,
+            command=self.on_brake_overlay_toggle,
+        ).grid(row=2, column=2, columnspan=2, sticky="w", pady=(4, 0))
+
         ttk.Label(controls, text="Fill Start %").grid(row=3, column=0, sticky="w", padx=(0, 8), pady=(6, 0))
         fill_start = ttk.Scale(
             controls,
@@ -266,6 +289,8 @@ class StatusGui:
         self.force_button_colors_var.set(control_values["force_button_colors"])
         self.menu_force_button_colors_var.set(control_values["menu_force_button_colors"])
         self.idle_led_writes_var.set(control_values["idle_led_writes"])
+        self.brake_overlay_var.set(control_values["brake_overlay"])
+        self.brake_overlay.set_visible(bool(self.brake_overlay_var.get()))
         self.update_control_labels()
         self.write_controls()
 
@@ -333,6 +358,10 @@ class StatusGui:
     def on_control_toggle(self):
         self.schedule_write()
 
+    def on_brake_overlay_toggle(self):
+        self.brake_overlay.set_visible(bool(self.brake_overlay_var.get()))
+        self.schedule_write()
+
     def schedule_write(self):
         if self.write_after_id is not None:
             self.root.after_cancel(self.write_after_id)
@@ -358,6 +387,7 @@ class StatusGui:
         force_button_colors = 1 if self.force_button_colors_var.get() else 0
         menu_force_button_colors = 1 if self.menu_force_button_colors_var.get() else 0
         idle_led_writes = 1 if self.idle_led_writes_var.get() else 0
+        brake_overlay = 1 if self.brake_overlay_var.get() else 0
 
         tmp_path = f"{self.control_path}.tmp"
         payload = (
@@ -371,6 +401,7 @@ class StatusGui:
             f"FORCE_BUTTON_COLORS={force_button_colors}\n"
             f"MENU_FORCE_BUTTON_COLORS={menu_force_button_colors}\n"
             f"IDLE_LED_WRITES={idle_led_writes}\n"
+            f"BRAKE_OVERLAY={brake_overlay}\n"
         )
 
         try:
@@ -385,6 +416,8 @@ class StatusGui:
         if not line:
             return
 
+        self.brake_overlay.handle_line(line)
+
         ts, level, msg = parse_line(line)
         if level not in LEVEL_COLORS:
             level = "INFO"
@@ -394,6 +427,8 @@ class StatusGui:
         self.text.see("end")
 
     def poll(self):
+        # Tail the launcher log in small increments so the GUI stays responsive without
+        # locking the file or missing newline-delimited entries while the bridge is running.
         try:
             if os.path.exists(self.log_path):
                 size = os.path.getsize(self.log_path)

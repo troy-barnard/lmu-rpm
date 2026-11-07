@@ -40,12 +40,6 @@ RPM_BRIGHTNESS_DEFAULT="${MOZA_RPM_BRIGHTNESS:-1.00}"
 RPM_FILL_START_DEFAULT="${MOZA_RPM_FILL_START:-65.0}"
 RPM_FILL_END_DEFAULT="${MOZA_RPM_FILL_END:-93.0}"
 
-if [ $# -eq 0 ]; then
-  echo "No LMU launch command was provided." >&2
-  echo "Use this script from Steam launch options with %command%." >&2
-  exit 1
-fi
-
 BRIDGE_PID=""
 STATUS_GUI_PID=""
 BRIDGE_LOG_OFFSET=0
@@ -212,10 +206,32 @@ stop_bridge_process_group() {
   fi
 }
 
+# Returns success once the LMU Windows process is visible inside the Proton prefix.
+# This is the startup gate that prevents the bridge from racing the game process.
 is_lmu_process_visible() {
   pgrep -f "Le Mans Ultimate\\.exe|LeMansUltimate\\.exe" >/dev/null 2>&1
 }
 
+# Wait until LMU is visible, but stop after a bounded timeout so launcher startup
+# does not block forever if the app never appears.
+wait_for_lmu_process_visible() {
+  local timeout_seconds="${1:-0}"
+  local elapsed=0
+
+  while ! is_lmu_process_visible; do
+    if [ "$timeout_seconds" -gt 0 ] && [ "$elapsed" -ge "$timeout_seconds" ]; then
+      return 1
+    fi
+    sleep 1
+    elapsed=$((elapsed + 1))
+  done
+
+  return 0
+}
+
+# Launch the bridge in a child process after the configured delay; this keeps the
+# launcher responsive while the game starts and allows us to retry cleanly when
+# the shared-memory map is not ready yet.
 start_bridge_process() {
   BRIDGE_LOG_OFFSET=$(wc -c <"$LOG_FILE" 2>/dev/null || echo 0)
   BRIDGE_STATUS_OFFSET=$BRIDGE_LOG_OFFSET
@@ -287,94 +303,112 @@ pump_bridge_status_from_log() {
   BRIDGE_STATUS_OFFSET=$current_size
 }
 
-: >"$STATUS_LOG_FILE"
-initialize_control_file
-load_control_file_overrides
-status_line "INFO" "Launcher started (APP_ID=$APP_ID, bridge delay=${START_DELAY}s)."
-status_line "INFO" "LMU launch command: $*"
-status_line "INFO" "LED config: force_rpm_colors=$FORCE_RPM_COLORS_ON_BOOT force_button_colors=$FORCE_BUTTON_COLORS_ON_BOOT menu_force_button_colors=$MENU_FORCE_BUTTON_COLORS_ON_IDLE idle_led_writes=$IDLE_LED_WRITES enable_button_color_overrides=$ENABLE_BUTTON_COLOR_OVERRIDES"
-status_line "INFO" "Control defaults: rpm_scale=$RPM_SCALE_DEFAULT brightness=$RPM_BRIGHTNESS_DEFAULT fill_start=$RPM_FILL_START_DEFAULT fill_end=$RPM_FILL_END_DEFAULT control_file=$CONTROL_FILE"
-
-if [ "$AUTO_RESET_ON_LAUNCH" = "1" ]; then
-  status_line "INFO" "Running runtime reset preflight."
-  if "$RESET_SCRIPT" >>"$LOG_FILE" 2>&1; then
-    status_line "SUCCESS" "Runtime reset preflight completed."
-  else
-    status_line "ERROR" "Runtime reset preflight failed. Continuing launch; see moza-rpm-launch.log."
+main() {
+  if [ "$#" -eq 0 ]; then
+    echo "No LMU launch command was provided." >&2
+    echo "Use this script from Steam launch options with %command%." >&2
+    exit 1
   fi
-else
-  status_line "WARN" "Runtime reset preflight disabled (MOZA_AUTO_RESET_ON_LAUNCH=$AUTO_RESET_ON_LAUNCH)."
-fi
 
-if [ "$AUTO_SETUP_ON_LAUNCH" = "1" ]; then
-  status_line "INFO" "Running COM1 preflight setup."
-  setup_ok=0
-  attempt=1
-  while [ "$attempt" -le "$SETUP_RETRY_COUNT" ]; do
-    if STEAM_APP_ID="$APP_ID" "$SETUP_SCRIPT" >>"$LOG_FILE" 2>&1; then
-      setup_ok=1
-      status_line "SUCCESS" "COM1 preflight setup completed (attempt $attempt/$SETUP_RETRY_COUNT)."
-      break
+  # Reset the status log before any launcher activity so the user sees a clean, ordered
+  # startup sequence when LMU and the bridge are launched together from Steam.
+  : >"$STATUS_LOG_FILE"
+  initialize_control_file
+  load_control_file_overrides
+  status_line "INFO" "Launcher started (APP_ID=$APP_ID, bridge delay=${START_DELAY}s)."
+  status_line "INFO" "LMU launch command: $*"
+  status_line "INFO" "LED config: force_rpm_colors=$FORCE_RPM_COLORS_ON_BOOT force_button_colors=$FORCE_BUTTON_COLORS_ON_BOOT menu_force_button_colors=$MENU_FORCE_BUTTON_COLORS_ON_IDLE idle_led_writes=$IDLE_LED_WRITES enable_button_color_overrides=$ENABLE_BUTTON_COLOR_OVERRIDES"
+  status_line "INFO" "Control defaults: rpm_scale=$RPM_SCALE_DEFAULT brightness=$RPM_BRIGHTNESS_DEFAULT fill_start=$RPM_FILL_START_DEFAULT fill_end=$RPM_FILL_END_DEFAULT control_file=$CONTROL_FILE"
+
+  if [ "$AUTO_RESET_ON_LAUNCH" = "1" ]; then
+    status_line "INFO" "Running runtime reset preflight."
+    if "$RESET_SCRIPT" >>"$LOG_FILE" 2>&1; then
+      status_line "SUCCESS" "Runtime reset preflight completed."
+    else
+      status_line "ERROR" "Runtime reset preflight failed. Continuing launch; see moza-rpm-launch.log."
     fi
+  else
+    status_line "WARN" "Runtime reset preflight disabled (MOZA_AUTO_RESET_ON_LAUNCH=$AUTO_RESET_ON_LAUNCH)."
+  fi
 
-    status_line "WARN" "COM1 preflight setup attempt $attempt/$SETUP_RETRY_COUNT failed; retrying in ${SETUP_RETRY_DELAY}s."
-    attempt=$((attempt + 1))
-    sleep "$SETUP_RETRY_DELAY"
+  if [ "$AUTO_SETUP_ON_LAUNCH" = "1" ]; then
+    status_line "INFO" "Running COM1 preflight setup."
+    setup_ok=0
+    attempt=1
+    while [ "$attempt" -le "$SETUP_RETRY_COUNT" ]; do
+      if STEAM_APP_ID="$APP_ID" "$SETUP_SCRIPT" >>"$LOG_FILE" 2>&1; then
+        setup_ok=1
+        status_line "SUCCESS" "COM1 preflight setup completed (attempt $attempt/$SETUP_RETRY_COUNT)."
+        break
+      fi
+
+      status_line "WARN" "COM1 preflight setup attempt $attempt/$SETUP_RETRY_COUNT failed; retrying in ${SETUP_RETRY_DELAY}s."
+      attempt=$((attempt + 1))
+      sleep "$SETUP_RETRY_DELAY"
+    done
+
+    if [ "$setup_ok" -ne 1 ]; then
+      status_line "ERROR" "COM1 preflight setup failed after $SETUP_RETRY_COUNT attempts. Continuing launch; see moza-rpm-launch.log."
+    fi
+  else
+    status_line "WARN" "COM1 preflight setup disabled (MOZA_AUTO_SETUP=$AUTO_SETUP_ON_LAUNCH)."
+  fi
+
+  # Start the GUI after preflight steps so reset/setup activity cannot interfere with it.
+  start_status_gui
+
+  "$@" &
+  GAME_PID=$!
+  status_line "INFO" "LMU process started (PID $GAME_PID)."
+  status_line "INFO" "Waiting for the LMU Windows process to become visible before starting the bridge."
+  if ! wait_for_lmu_process_visible $((START_DELAY + 15)); then
+    status_line "WARN" "LMU process did not appear within ${START_DELAY}s of launch; continuing with bridge startup anyway."
+  fi
+
+  status_line "INFO" "Bridge launch scheduled after ${START_DELAY}s."
+  start_bridge_process
+
+  if ! wait_for_bridge_connection && [ "$BRIDGE_RESTART_ON_CONNECT_FAIL" = "1" ]; then
+    status_line "WARN" "Restarting bridge once after connection failure."
+    stop_bridge_process_group
+    start_bridge_process
+    if ! wait_for_bridge_connection; then
+      status_line "ERROR" "Bridge did not establish telemetry connection after restart."
+    fi
+  fi
+
+  seen_lmu_process=0
+  missing_count=0
+  reported_waiting_for_lmu=0
+
+  while kill -0 "$GAME_PID" 2>/dev/null; do
+    pump_bridge_status_from_log
+
+    if is_lmu_process_visible; then
+      if [ "$seen_lmu_process" -eq 0 ]; then
+        status_line "SUCCESS" "LMU Windows process detected in Proton."
+      fi
+      seen_lmu_process=1
+      missing_count=0
+    elif [ "$seen_lmu_process" -eq 1 ]; then
+      missing_count=$((missing_count + 1))
+      status_line "WARN" "LMU process temporarily missing (${missing_count}/2)."
+      if [ "$missing_count" -ge 2 ]; then
+        status_line "ERROR" "LMU process disappeared; stopping bridge."
+        cleanup
+        break
+      fi
+    elif [ "$reported_waiting_for_lmu" -eq 0 ]; then
+      status_line "INFO" "Waiting for LMU Windows process to appear..."
+      reported_waiting_for_lmu=1
+    fi
+    sleep 2
   done
 
-  if [ "$setup_ok" -ne 1 ]; then
-    status_line "ERROR" "COM1 preflight setup failed after $SETUP_RETRY_COUNT attempts. Continuing launch; see moza-rpm-launch.log."
-  fi
-else
-  status_line "WARN" "COM1 preflight setup disabled (MOZA_AUTO_SETUP=$AUTO_SETUP_ON_LAUNCH)."
+  wait "$GAME_PID"
+  status_line "INFO" "LMU process exited."
+}
+
+if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
+  main "$@"
 fi
-
-# Start the GUI after preflight steps so reset/setup activity cannot interfere with it.
-start_status_gui
-
-"$@" &
-GAME_PID=$!
-status_line "INFO" "LMU process started (PID $GAME_PID)."
-
-status_line "INFO" "Bridge launch scheduled after ${START_DELAY}s."
-start_bridge_process
-
-if ! wait_for_bridge_connection && [ "$BRIDGE_RESTART_ON_CONNECT_FAIL" = "1" ]; then
-  status_line "WARN" "Restarting bridge once after connection failure."
-  stop_bridge_process_group
-  start_bridge_process
-  if ! wait_for_bridge_connection; then
-    status_line "ERROR" "Bridge did not establish telemetry connection after restart."
-  fi
-fi
-
-seen_lmu_process=0
-missing_count=0
-reported_waiting_for_lmu=0
-
-while kill -0 "$GAME_PID" 2>/dev/null; do
-  pump_bridge_status_from_log
-
-  if is_lmu_process_visible; then
-    if [ "$seen_lmu_process" -eq 0 ]; then
-      status_line "SUCCESS" "LMU Windows process detected in Proton."
-    fi
-    seen_lmu_process=1
-    missing_count=0
-  elif [ "$seen_lmu_process" -eq 1 ]; then
-    missing_count=$((missing_count + 1))
-    status_line "WARN" "LMU process temporarily missing (${missing_count}/2)."
-    if [ "$missing_count" -ge 2 ]; then
-      status_line "ERROR" "LMU process disappeared; stopping bridge."
-      cleanup
-      break
-    fi
-  elif [ "$reported_waiting_for_lmu" -eq 0 ]; then
-    status_line "INFO" "Waiting for LMU Windows process to appear..."
-    reported_waiting_for_lmu=1
-  fi
-  sleep 2
-done
-
-wait "$GAME_PID"
-status_line "INFO" "LMU process exited."
