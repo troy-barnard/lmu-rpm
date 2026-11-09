@@ -1,10 +1,51 @@
 /// Runtime configuration and control for the Moza RPM display.
+///
+/// This module manages configuration values that can be changed at runtime without restarting
+/// the bridge. It provides:
+///
+/// - **Constants**: Default and boundary values for all configurable parameters
+/// - **RuntimeControl**: A struct holding current configuration values
+/// - **RuntimeControlFile**: Watches for changes in the `config/moza-rpm-control.env` file
+/// - **Helper functions**: For reading/parsing environment variables and clamping values
+///
+/// ## Configuration Parameters
+///
+/// All parameters have min/max bounds to prevent invalid configurations:
+///
+/// - **rpm_scale** (0.6 to 1.4): Multiplier for the RPM percentage
+///   - 1.0 = normal (LEDs fill at actual RPM %)
+///   - 0.6 = compressed (LEDs fill faster, more dramatic effect)
+///   - 1.4 = stretched (LEDs fill slower, more granular)
+///
+/// - **brightness** (0.1 to 1.0): LED brightness level
+///   - 0.1 = very dim
+///   - 1.0 = full brightness
+///
+/// - **fill_start_percent** (40 to 80): RPM % at which the first LED lights
+///   - 40 = start lighting very early
+///   - 80 = start lighting very late
+///
+/// - **fill_end_percent** (85 to 95): RPM % at which all LEDs are lit
+///   - Must be greater than fill_start_percent
+///   - Controls how spread out the LED filling is
+///
+/// ## Runtime Updates
+///
+/// The status GUI writes changes to `config/moza-rpm-control.env`, and the bridge's
+/// `RuntimeControlFile::poll()` method checks for file updates. If the file has changed,
+/// it reads the new values and returns them, allowing the main loop to apply the changes.
 use std::fs::metadata;
 use std::path::PathBuf;
 use std::time::{Duration, Instant, SystemTime};
 
+/// Interval for refreshing button LED colors when idle in menus
+/// (when no telemetry is being received from the game).
 pub const MENU_BUTTON_REFRESH_INTERVAL: Duration = Duration::from_millis(1500);
+
+/// Interval for polling the runtime control file for changes.
 pub const CONTROL_POLL_INTERVAL: Duration = Duration::from_millis(250);
+
+// Default configuration values
 pub const DEFAULT_RPM_SCALE: f32 = 1.0;
 pub const DEFAULT_BRIGHTNESS: f32 = 1.0;
 pub const MIN_RPM_SCALE: f32 = 0.6;
@@ -19,16 +60,29 @@ pub const MIN_FILL_END_PERCENT: f32 = 85.0;
 pub const MAX_FILL_END_PERCENT: f32 = 95.0;
 pub const LED_COUNT: usize = 15;
 
+/// Current runtime configuration for the RPM display.
+///
+/// All fields are updated from environment variables at startup and can be
+/// reloaded from the control file at runtime.
 #[derive(Clone, Copy, Debug)]
 pub struct RuntimeControl {
+    /// Multiplier applied to the RPM percentage (0.6 to 1.4)
     pub rpm_scale: f32,
+    /// LED brightness level (0.1 to 1.0)
     pub brightness: f32,
+    /// RPM % at which the first LED lights (40 to 80)
     pub fill_start_percent: f32,
+    /// RPM % at which all LEDs are lit (85 to 95)
     pub fill_end_percent: f32,
+    /// Whether to override RPM colors (use custom palette instead of wheel's default)
     pub override_rpm_colors: bool,
+    /// Master gate: whether to enable button color overrides at all
     pub enable_button_overrides: bool,
+    /// Force button colors on boot (before game starts)
     pub force_button_colors: bool,
+    /// Force button colors when idle in menus (after telemetry stops)
     pub menu_force_button_colors: bool,
+    /// Whether to send LED updates during idle/menu state
     pub idle_led_writes: bool,
 }
 

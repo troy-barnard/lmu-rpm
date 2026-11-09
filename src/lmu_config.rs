@@ -1,3 +1,31 @@
+//! LMU shared-memory configuration and offsets.
+//!
+//! This module defines the memory layout constants used to extract telemetry data from
+//! Le Mans Ultimate's shared memory block. These values are based on reverse-engineering
+//! the LMU telemetry structure.
+//!
+//! ## Memory Layout
+//!
+//! The LMU shared memory block contains:
+//! 1. **Header section** (bytes 0-128,463): Metadata and game state
+//! 2. **Telemetry section** (bytes 128,464+): Per-vehicle telemetry records
+//!
+//! Each vehicle telemetry record is 1,888 bytes and contains:
+//! - Engine RPM (f64 at offset 0x164)
+//! - Engine max RPM (f64 at offset 0x214)
+//! - Brake input (f64 at offsets 0x18c or 0x1a4)
+//! - And many other values (position, speed, steering angle, etc.)
+//!
+//! ## Offsets vs Addresses
+//!
+//! All offset constants in this module are **relative within the vehicle telemetry record**
+//! (the 1,888-byte structure), not absolute addresses in the shared memory block.
+//!
+//! To read a value from LMU shared memory:
+//! ```text
+//! absolute_address = LMU_TELEMETRY_OFFSET + vehicle_index * LMU_TELEM_INFO_SIZE + relative_offset
+//! ```
+
 /// Candidate shared-memory mapping names exposed by LMU under Wine/Proton.
 ///
 /// Some environments expose the object in the default namespace (`LMU_Data`)

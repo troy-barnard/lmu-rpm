@@ -1,16 +1,70 @@
-/// Moza structures and serial communication for the Moza RPM display.
-use std::thread::sleep;
-use std::time::{Duration, Instant};
+//! Moza steering wheel serial communication and LED control.
+//!
+//! This module handles all communication with a Moza R9 steering wheel base over the serial port.
+//! The wheel is controlled via a custom binary protocol where packets are sent to set LED colors,
+//! brightness levels, and which LEDs light up based on engine RPM.
+//!
+//! ## Serial Protocol Overview
+//!
+//! Packets have a fixed structure:
+//! ```text
+//! [START] [LENGTH] [COMMAND] [SUBCOMMAND] [PAYLOAD...] [CHECKSUM]
+//! 0x7e    1 byte   2 bytes   2 bytes       variable    1 byte
+//! ```
+//!
+//! - **START** (0x7e): Always 0x7e, marks the beginning of a packet
+//! - **LENGTH**: Number of bytes from command to checksum (inclusive)
+//! - **COMMAND/SUBCOMMAND**: Identifies what the packet does (e.g., 0x3f17 for LED updates)
+//! - **PAYLOAD**: Command-specific data
+//! - **CHECKSUM**: Simple additive checksum (sum of all bytes mod 256)
+//!
+//! ## LED Control
+//!
+//! The wheel has 15 RPM indicator LEDs that light up based on engine speed:
+//! - At low RPM: No LEDs
+//! - As RPM increases: LEDs light up from left to right
+//! - At high RPM (>95%): LEDs flash on/off to warn of shift
+//!
+//! The `send_rpm_telemetry_command` function builds a packet that specifies which LEDs are on
+//! by sending a 2-byte bitmask (15 bits used, one per LED).
+//!
+//! ## Color Configuration
+//!
+//! The wheel supports customizable LED colors via `RPM_COLOR_PAYLOAD_*` and `BTN_COLOR_PAYLOAD_*`
+//! constants. Each payload packet configures colors for different LED ranges:
+//! - Payload 1: LEDs 0-4 (usually green)
+//! - Payload 2: LEDs 5-9 (usually yellow/orange)
+//! - Payload 3: LEDs 10-14 (usually red)
+//!
+//! Button LEDs have their own color payloads and are controlled separately.
+//!
+//! ## Timing and State
+//!
+//! The `MozaSerial` struct tracks:
+//! - The open serial port
+//! - `flash_start`: Timestamp for LED flashing at high RPM (toggles every 200ms)
 
 use crate::runtime::{
     clamp_f32, LED_COUNT, MAX_BRIGHTNESS, MIN_BRIGHTNESS, MIN_FILL_END_PERCENT, MIN_FILL_START_PERCENT,
     MAX_FILL_END_PERCENT, MAX_FILL_START_PERCENT,
 };
+use std::thread::sleep;
+use std::time::{Duration, Instant};
 
 /// Base packet template for Moza RPM LED bitmask updates.
 ///
 /// Bytes at indices 6 and 7 are populated with LED on/off bits before sending.
 /// The final byte (index 10) is replaced with the computed packet checksum.
+///
+/// # Packet Structure
+///
+/// - [0]: 0x7e (packet start marker)
+/// - [1]: 0x06 (packet length)
+/// - [2-3]: 0x3f17 (command/subcommand for LED bitmask)
+/// - [4-5]: 0x1a00 (reserved bytes)
+/// - [6-7]: LED bitmask (filled in by send_rpm_telemetry_command)
+/// - [8-9]: Reserved
+/// - [10]: Checksum (computed at send time)
 pub const RPM_MASK_TEMPLATE: [u8; 11] = [0x7e, 0x06, 0x3f, 0x17, 0x1a, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00];
 
 /// First color-configuration packet for RPM LEDs.

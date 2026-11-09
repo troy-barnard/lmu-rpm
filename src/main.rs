@@ -1,9 +1,52 @@
-/// Main entrypoint for the Moza RPM telemetry bridge.
-mod lmu;
-mod lmu_config;
-mod moza;
-mod runtime;
+//! Moza RPM telemetry bridge binary.
+//!
+//! This binary bridges Le Mans Ultimate telemetry (engine RPM and brake pedal data) from LMU's
+//! Windows shared memory over serial to a Moza R9 steering wheel base, controlling the RPM
+//! display LEDs and button colors.
+//!
+//! ## How It Works
+//!
+//! 1. **Initialization**: Load configuration from `config/secrets.json`, set up runtime state,
+//!    and open serial connection to the Moza wheel.
+//!
+//! 2. **Telemetry Reading** (separate blocking tasks):
+//!    - Connect to LMU shared memory (Windows memory-mapped file via Wine/Proton)
+//!    - Poll for RPM and brake values at known offsets in the shared memory block
+//!    - Send updates through async-safe watch channels
+//!
+//! 3. **Serial Control** (async task):
+//!    - Listen on watch channels for RPM/brake updates
+//!    - Apply runtime configuration (RPM scale, brightness, fill range)
+//!    - Build serial packets according to Moza's protocol
+//!    - Send packets to wheel to update LEDs
+//!    - Watch for runtime control file changes and reload configuration
+//!
+//! 4. **Status GUI** (separate process):
+//!    - Launch an optional Python/Tk GUI that tails the status log and displays current state
+//!    - User can adjust RPM scale, brightness, and fill range on the fly
+//!    - Changes are written to `config/moza-rpm-control.env` and loaded by the bridge
+//!
+//! ## Environment Variables
+//!
+//! See `docs/README.md` for a complete list. Key ones:
+//! - `MOZA_RPM_DEBUG=1`: Enable verbose debug logging to `logs/moza-rpm-debug.log`
+//! - `MOZA_RPM_SCALE=1.0`: Multiply RPM % by this factor (0.6 to 1.4)
+//! - `MOZA_RPM_BRIGHTNESS=1.0`: LED brightness (0.1 to 1.0)
+//! - `MOZA_RPM_FILL_START=65.0`: RPM % at which LEDs start filling (40 to 80)
+//! - `MOZA_RPM_FILL_END=93.0`: RPM % at which all LEDs are on (85 to 95)
+//!
+//! ## Log Files
+//!
+//! - `logs/moza-rpm-status.log`: Status updates (vehicle connected, RPM samples, etc.)
+//! - `logs/moza-rpm-launch.log`: Full stderr output from startup/shutdown
+//! - `logs/moza-rpm-debug.log`: Detailed debug trace (when `MOZA_RPM_DEBUG=1`)
+//!
+//! ## Configuration Files
+//!
+//! - `config/secrets.json`: Steam library paths, Proton installation, wheel serial device
+//! - `config/moza-rpm-control.env`: Runtime state (updated by status GUI)
 
+use moza_rpm::{lmu::*, moza::*, runtime::*};
 use std::fs::OpenOptions;
 use std::io::Write as _;
 use std::panic;
@@ -13,14 +56,10 @@ use std::time::{Duration, Instant};
 use tokio::sync::watch;
 use tokio::time::{sleep as tokio_sleep, timeout};
 
-use crate::lmu::{normalize_simetry_brake_percent, LmuSharedMemory};
-use crate::moza::MozaSerial;
-use crate::runtime::{
-    clamp_f32, env_flag, read_env_u64_ms, should_log_brake_sample, should_log_sample, RuntimeControl,
-    RuntimeControlFile, MENU_BUTTON_REFRESH_INTERVAL,
-};
-
 /// Entrypoint for the telemetry bridge.
+///
+/// This function sets up the async runtime, initializes logging, spawns telemetry reading tasks,
+/// and runs the main event loop that sends LED commands to the Moza wheel.
 #[tokio::main]
 async fn main() {
     let debug = env_flag("MOZA_RPM_DEBUG");

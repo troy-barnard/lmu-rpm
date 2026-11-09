@@ -1,4 +1,34 @@
-/// LMU shared-memory telemetry reader for the Moza RPM display.
+//! LMU (Le Mans Ultimate) shared memory telemetry reader.
+//!
+//! This module provides Windows API integration to read telemetry data from LMU's shared memory block.
+//! LMU exposes game state (vehicle position, RPM, brake input, etc.) through a memory-mapped file that
+//! this crate can access even when running under Wine/Proton on Linux.
+//!
+//! ## Shared Memory Access
+//!
+//! LMU creates a Windows named object in the global namespace (accessible from Wine/Proton):
+//! - Name: `LMU_Data` (or `Global\\LMU_Data` depending on Wine version)
+//! - Access: Read-only memory mapping
+//! - Format: A binary block with a fixed structure and known offsets
+//!
+//! This module opens the mapping, creates a view to access the memory, reads values at configured
+//! offsets, and normalizes them into usable percentages.
+//!
+//! ## Brake Normalization
+//!
+//! The brake value in shared memory is typically a float (0.0 to 1.0 or 0 to 100) representing
+//! pedal pressure. Two readings are available:
+//! - **Filtered** (offset 0x1a4): Game-smoothed, lower noise (preferred)
+//! - **Unfiltered** (offset 0x18c): Raw pedal input, higher noise but more responsive (fallback)
+//!
+//! This module normalizes and validates these values, applying a dead zone to ignore vibration noise
+//! from suspension and road surface imperfections (flat spots, etc.).
+
+use crate::lmu_config::{
+    LMU_BRAKE_CANDIDATE_OFFSETS, LMU_BRAKE_PERCENT_FALLBACK_OFFSET, LMU_BRAKE_PERCENT_OFFSET,
+    LMU_ENGINE_MAX_RPM_OFFSET, LMU_ENGINE_RPM_OFFSET, LMU_MAPPING_NAMES, LMU_MAX_VEHICLES,
+    LMU_TELEM_INFO_OFFSET, LMU_TELEM_INFO_SIZE, LMU_TELEMETRY_OFFSET,
+};
 use std::cell::Cell;
 
 use winapi::shared::ntdef::HANDLE;
@@ -6,29 +36,25 @@ use winapi::um::handleapi::CloseHandle;
 use winapi::um::memoryapi::{FILE_MAP_READ, MapViewOfFile, UnmapViewOfFile};
 use winapi::um::winbase::OpenFileMappingA;
 
-use crate::lmu_config::{
-    LMU_BRAKE_CANDIDATE_OFFSETS, LMU_BRAKE_PERCENT_FALLBACK_OFFSET, LMU_BRAKE_PERCENT_OFFSET,
-    LMU_ENGINE_MAX_RPM_OFFSET, LMU_ENGINE_RPM_OFFSET, LMU_MAPPING_NAMES, LMU_MAX_VEHICLES,
-    LMU_TELEM_INFO_OFFSET, LMU_TELEM_INFO_SIZE, LMU_TELEMETRY_OFFSET,
-};
-
-fn normalize_brake_percent_candidate(value: f64) -> Option<f64> {
-    if !value.is_finite() {
-        return None;
-    }
-    // Increased dead zone from 5% to 8% to filter out vibration noise from flat spots
-    if value > 0.0 && value < 0.08 {
-        return None;
-    }
-    if (0.0..=1.5).contains(&value) {
-        return Some(value * 100.0);
-    }
-    if (1.0..=100.0).contains(&value) {
-        return Some(value);
-    }
-    None
-}
-
+/// Normalizes a raw brake value from LMU shared memory into a valid brake percentage (0-100).
+///
+/// The shared memory stores brake as an f64, which can represent:
+/// - 0.0 to 1.0 (normalized percentage)
+/// - 0 to 100 (percentage directly)
+/// - Invalid values (NaN, infinity, out of range)
+///
+/// This function also applies a dead zone to filter out vibration noise:
+/// - Values between 0% and 8% are treated as fully released (0%)
+/// - Invalid values (NaN, infinity) return None
+/// - Out-of-range values return None
+///
+/// # Arguments
+///
+/// * `value` - The raw f64 value read from LMU shared memory
+///
+/// # Returns
+///
+/// `Some(percentage)` where percentage is 0-100, or `None` if the value is invalid
 pub fn normalize_simetry_brake_percent(value: f64) -> Option<u8> {
     if !value.is_finite() || value < 0.0 {
         return None;
