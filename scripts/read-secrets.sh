@@ -7,11 +7,11 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT_DIR="$(dirname "$SCRIPT_DIR")"
-SECRETS_FILE="$ROOT_DIR/secrets.json"
+SECRETS_FILE="$ROOT_DIR/config/secrets.json"
 
 if [ ! -f "$SECRETS_FILE" ]; then
   echo "Error: secrets.json not found at $SECRETS_FILE" >&2
-  echo "Please copy example.secrets.json to secrets.json and customize it." >&2
+  echo "Please copy config/example.secrets.json to config/secrets.json and customize it." >&2
   exit 1
 fi
 

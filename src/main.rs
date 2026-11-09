@@ -28,7 +28,7 @@ async fn main() {
     let default_control = RuntimeControl::from_env_defaults().sanitize();
     let control_file_path = std::env::var("MOZA_CONTROL_FILE")
         .map(PathBuf::from)
-        .unwrap_or_else(|_| PathBuf::from("moza-rpm-control.env"));
+        .unwrap_or_else(|_| PathBuf::from("config/moza-rpm-control.env"));
     let mut control_file = RuntimeControlFile::new(control_file_path);
     let mut control = default_control;
     if let Some(from_file) = control_file.poll(default_control) {
@@ -36,7 +36,7 @@ async fn main() {
     }
     if debug {
         panic::set_hook(Box::new(|info| {
-            if let Ok(mut file) = OpenOptions::new().create(true).append(true).open("moza-rpm-debug.log") {
+            if let Ok(mut file) = OpenOptions::new().create(true).append(true).open("logs/moza-rpm-debug.log") {
                 let _ = writeln!(file, "panic: {info}");
                 let _ = file.flush();
             }
@@ -49,7 +49,7 @@ async fn main() {
         OpenOptions::new()
             .create(true)
             .append(true)
-            .open("moza-rpm-debug.log")
+            .open("logs/moza-rpm-debug.log")
             .ok()
     } else {
         None

@@ -1,11 +1,18 @@
 # Build outputs
 target/
 
-# Runtime artifacts
-*.log
-*.exe
-moza-rpm-control.env
-.lmu_offset_watch.txt
+# Runtime logs
+logs/
+
+# Runtime state and local config
+config/moza-rpm-control.env
+config/secrets.json
+config/.secrets.*
 
 # Secrets and configuration
-secrets.json
+# (example files are tracked, local overrides are ignored above)
+
+# IDE
+__pycache__/
+*.pyc
+.pytest_cache/

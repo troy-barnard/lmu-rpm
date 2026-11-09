@@ -470,8 +470,8 @@ class StatusGui:
 
 
 def main():
-    log_path = sys.argv[1] if len(sys.argv) > 1 else "moza-rpm-status.log"
-    control_path = sys.argv[2] if len(sys.argv) > 2 else "moza-rpm-control.env"
+    log_path = sys.argv[1] if len(sys.argv) > 1 else "logs/moza-rpm-status.log"
+    control_path = sys.argv[2] if len(sys.argv) > 2 else "config/moza-rpm-control.env"
     app = StatusGui(log_path, control_path)
     app.run()
 

@@ -6,11 +6,14 @@ SCRIPT_DIR="$(dirname "${BASH_SOURCE[0]}")"
 BRIDGE_SCRIPT="$ROOT_DIR/scripts/run-moza-rpm.sh"
 SETUP_SCRIPT="$ROOT_DIR/scripts/setup-moza-rpm.sh"
 RESET_SCRIPT="$ROOT_DIR/scripts/reset-runtime.sh"
-LOG_FILE="$ROOT_DIR/moza-rpm-launch.log"
-STATUS_LOG_FILE="$ROOT_DIR/moza-rpm-status.log"
-STATUS_GUI_ERROR_LOG="$ROOT_DIR/moza-rpm-status-gui.log"
+LOG_DIR="$ROOT_DIR/logs"
+mkdir -p "$LOG_DIR"
+LOG_FILE="$LOG_DIR/moza-rpm-launch.log"
+STATUS_LOG_FILE="$LOG_DIR/moza-rpm-status.log"
+STATUS_GUI_ERROR_LOG="$LOG_DIR/moza-rpm-status-gui.log"
 STATUS_GUI_PY="$ROOT_DIR/scripts/status-gui.py"
-CONTROL_FILE="$ROOT_DIR/moza-rpm-control.env"
+CONTROL_FILE="$ROOT_DIR/config/moza-rpm-control.env"
+mkdir -p "$(dirname "$CONTROL_FILE")"
 
 # Load configuration from secrets.json
 source "$SCRIPT_DIR/read-secrets.sh" 2>/dev/null || {
