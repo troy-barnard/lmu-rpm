@@ -1,0 +1,7 @@
+# Cross-compilation target for Windows (runs on Linux via Wine/Proton)
+[build]
+target = "x86_64-pc-windows-gnu"
+
+# Optional: uncomment to enable verbose logging during builds
+# [term]
+# verbose = true
