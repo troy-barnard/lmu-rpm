@@ -19,7 +19,7 @@ LEVEL_COLORS = {
 
 BG = "#14181f"
 FG = "#d6deeb"
-CONTROL_POLL_MS = 300
+CONTROL_POLL_MS = 100  # Reduced from 300ms for more responsive brake telemetry
 CONTROL_WRITE_DEBOUNCE_MS = 180
 
 RPM_SCALE_MIN = 0.6
@@ -313,10 +313,16 @@ class StatusGui:
         scrollbar.pack(side="right", fill="y")
         self.text.configure(yscrollcommand=scrollbar.set)
 
-        self.text.tag_configure("INFO", foreground=LEVEL_COLORS["INFO"])
-        self.text.tag_configure("SUCCESS", foreground=LEVEL_COLORS["SUCCESS"])
-        self.text.tag_configure("WARN", foreground=LEVEL_COLORS["WARN"])
-        self.text.tag_configure("ERROR", foreground=LEVEL_COLORS["ERROR"])
+        for key, color in LEVEL_COLORS.items():
+            try:
+                self.text.tag_configure(key, foreground=color)
+            except tk.TclError:
+                pass
+
+        self.text.bind("<Control-c>", self.copy_selected_text)
+        self.text.bind("<Control-C>", self.copy_selected_text)
+        self.root.bind("<Control-c>", self.copy_selected_text)
+        self.root.bind("<Control-C>", self.copy_selected_text)
 
         self.root.after(100, self.poll)
 
@@ -410,6 +416,18 @@ class StatusGui:
             os.replace(tmp_path, self.control_path)
         except OSError as exc:
             self.append_line(f"[ERROR] Failed to write control file: {exc}")
+
+    def copy_selected_text(self, _event=None):
+        try:
+            selected = self.text.get("sel.first", "sel.last")
+        except tk.TclError:
+            selected = self.text.get("1.0", "end")
+
+        if selected.strip():
+            self.root.clipboard_clear()
+            self.root.clipboard_append(selected)
+            return "break"
+        return ""
 
     def append_line(self, line: str):
         line = line.rstrip("\n")

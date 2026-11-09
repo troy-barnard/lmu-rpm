@@ -2,4 +2,5 @@
 # moza-rpm-launch.log
 moza-rpm.exe
 secrets.json
+moza-rpm-control.env
 *.log

@@ -142,6 +142,28 @@ pub fn should_log_sample(
     false
 }
 
+pub fn should_log_brake_sample(
+    percent: u8,
+    last_logged_percent: Option<u8>,
+    last_sample_log: Instant,
+    sample_log_interval: Duration,
+) -> bool {
+    if percent == 0 {
+        return last_logged_percent.map_or(false, |previous| previous > 0) || last_sample_log.elapsed() >= sample_log_interval;
+    }
+
+    if let Some(previous) = last_logged_percent {
+        if previous.abs_diff(percent) >= 5 {
+            return true;
+        }
+        if last_sample_log.elapsed() >= sample_log_interval && previous != percent {
+            return true;
+        }
+    }
+
+    last_logged_percent.is_none() && last_sample_log.elapsed() >= sample_log_interval
+}
+
 pub fn clamp_f32(value: f32, min_value: f32, max_value: f32) -> f32 {
     value.max(min_value).min(max_value)
 }

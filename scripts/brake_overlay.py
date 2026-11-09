@@ -173,9 +173,8 @@ class BrakeGraphOverlay:
             y = plot_top + y_ratio * (plot_bottom - plot_top)
             points.append((x, y))
 
-        fill_points = [(plot_left, plot_bottom)] + points + [(plot_right, plot_bottom)]
-        canvas.create_polygon(fill_points, outline="", fill="#ff6b6b11")
-        canvas.create_line([point for pair in points for point in pair], fill="#ff6b6b", width=2)
+        # Draw only the line trace (no fill) for a cleaner look
+        canvas.create_line([point for pair in points for point in pair], fill="#ff6b6b", width=2.5)
 
         latest_x = points[-1][0]
         latest_y = points[-1][1]

@@ -7,9 +7,64 @@ use winapi::um::memoryapi::{FILE_MAP_READ, MapViewOfFile, UnmapViewOfFile};
 use winapi::um::winbase::OpenFileMappingA;
 
 use crate::lmu_config::{
-    LMU_BRAKE_CANDIDATE_OFFSETS, LMU_ENGINE_MAX_RPM_OFFSET, LMU_ENGINE_RPM_OFFSET, LMU_MAPPING_NAMES,
-    LMU_MAX_VEHICLES, LMU_TELEM_INFO_OFFSET, LMU_TELEM_INFO_SIZE, LMU_TELEMETRY_OFFSET,
+    LMU_BRAKE_CANDIDATE_OFFSETS, LMU_BRAKE_PERCENT_FALLBACK_OFFSET, LMU_BRAKE_PERCENT_OFFSET,
+    LMU_ENGINE_MAX_RPM_OFFSET, LMU_ENGINE_RPM_OFFSET, LMU_MAPPING_NAMES, LMU_MAX_VEHICLES,
+    LMU_TELEM_INFO_OFFSET, LMU_TELEM_INFO_SIZE, LMU_TELEMETRY_OFFSET,
 };
+
+fn normalize_brake_percent_candidate(value: f64) -> Option<f64> {
+    if !value.is_finite() {
+        return None;
+    }
+    if value > 0.0 && value < 0.05 {
+        return None;
+    }
+    if (0.0..=1.5).contains(&value) {
+        return Some(value * 100.0);
+    }
+    if (1.0..=100.0).contains(&value) {
+        return Some(value);
+    }
+    None
+}
+
+pub fn normalize_simetry_brake_percent(value: f64) -> Option<u8> {
+    if !value.is_finite() || value < 0.0 {
+        return None;
+    }
+
+    let percent = if value <= 1.0 {
+        value * 100.0
+    } else if value <= 100.0 {
+        value
+    } else {
+        return None;
+    };
+
+    let clamped = percent.clamp(0.0, 100.0);
+    if clamped < 5.0 {
+        return Some(0);
+    }
+
+    Some(clamped.round() as u8)
+}
+
+fn brake_candidate_score(value: f64) -> f64 {
+    let mut score = 0.0;
+    if value >= 0.0 && value <= 1.5 {
+        score += 100.0;
+    }
+    if value >= 0.0 && value <= 100.0 {
+        score += 10.0;
+    }
+    if value >= 0.0 && value <= 1.5 {
+        score += 5.0;
+    }
+    if value > 1.0 && value <= 100.0 {
+        score += 2.0;
+    }
+    score
+}
 
 /// Wrapper around LMU shared-memory mapping resources.
 pub struct LmuSharedMemory {
@@ -129,40 +184,49 @@ impl LmuSharedMemory {
 
             let read_slot = |idx: u8| -> Option<f64> {
                 let info_base = telemetry.add(LMU_TELEM_INFO_OFFSET + (idx as usize * LMU_TELEM_INFO_SIZE));
+
+                // Log raw values for debugging
+                let raw_0x190 = *(info_base.add(0x190) as *const f64);
+                let raw_0x198 = *(info_base.add(0x198) as *const f64);
+                let raw_0x1a0 = *(info_base.add(0x1a0) as *const f64);
+                eprintln!("[BRAKE_DEBUG] 0x190={:.6} 0x198={:.6} 0x1a0={:.6}", raw_0x190, raw_0x198, raw_0x1a0);
+
+                let read_candidate = |offset: usize| -> Option<f64> {
+                    let value = *(info_base.add(offset) as *const f64);
+                    let normalized = normalize_brake_percent_candidate(value)?;
+                    if normalized >= 0.0 && normalized <= 100.0 {
+                        return Some(normalized);
+                    }
+                    None
+                };
+
+                if let Some(value) = read_candidate(LMU_BRAKE_PERCENT_OFFSET)
+                    .or_else(|| read_candidate(LMU_BRAKE_PERCENT_FALLBACK_OFFSET))
+                {
+                    eprintln!("[BRAKE_DEBUG] Found via primary/fallback: {}", value);
+                    return Some(value);
+                }
+
                 let mut best_value: Option<f64> = None;
                 let mut best_score = -f64::INFINITY;
 
                 for &offset in &LMU_BRAKE_CANDIDATE_OFFSETS {
-                    let value = *(info_base.add(offset) as *const f32) as f64;
+                    let value = *(info_base.add(offset) as *const f64);
                     if !value.is_finite() {
                         continue;
                     }
 
-                    let mut score = 0.0;
-                    if (0.0..=1.0).contains(&value) {
-                        score += 100.0;
-                    }
-                    if (0.0..=100.0).contains(&value) {
-                        score += 10.0;
-                    }
-                    if value >= 0.0 && value <= 1.5 {
-                        score += 5.0;
-                    }
-                    if value > 1.0 && value <= 100.0 {
-                        score += 2.0;
-                    }
-
+                    let score = brake_candidate_score(value);
                     if score > best_score {
                         best_score = score;
-                        best_value = Some(value);
+                        best_value = normalize_brake_percent_candidate(value);
                     }
                 }
 
-                match best_value {
-                    Some(value) if value >= 0.0 && value <= 1.5 => Some(value * 100.0),
-                    Some(value) if value > 1.0 && value <= 100.0 => Some(value),
-                    _ => None,
+                if best_value.is_some() {
+                    eprintln!("[BRAKE_DEBUG] Found via candidate scan: {:?}", best_value);
                 }
+                best_value
             };
 
             if player_idx < active_vehicles && player_idx < LMU_MAX_VEHICLES {
@@ -193,6 +257,134 @@ impl LmuSharedMemory {
             self.preferred_vehicle_idx.set(None);
             None
         }
+    }
+
+    /// Emits the most plausible brake candidate values from the current player's LMU telemetry,
+    /// sorted by their likelihood so the live debug stream reveals the field that moves under pedal input.
+    pub fn debug_brake_probe(&self, max_results: usize) -> Vec<(usize, f64)> {
+        unsafe {
+            let telemetry = self.mapped_view.add(LMU_TELEMETRY_OFFSET);
+            let active_vehicles = *telemetry;
+            let player_idx = *telemetry.add(1);
+
+            if active_vehicles == 0 {
+                return Vec::new();
+            }
+
+            let target_idx = if player_idx < active_vehicles && player_idx < LMU_MAX_VEHICLES {
+                player_idx
+            } else if let Some(preferred_idx) = self.preferred_vehicle_idx.get() {
+                preferred_idx
+            } else {
+                0
+            };
+
+            let info_base = telemetry.add(LMU_TELEM_INFO_OFFSET + (target_idx as usize * LMU_TELEM_INFO_SIZE));
+            let mut results: Vec<(usize, f64, f64)> = Vec::new();
+
+            for &offset in &LMU_BRAKE_CANDIDATE_OFFSETS {
+                let value = *(info_base.add(offset) as *const f32) as f64;
+                if !value.is_finite() {
+                    continue;
+                }
+                let score = brake_candidate_score(value);
+                if score <= 0.0 {
+                    continue;
+                }
+                if let Some(normalized) = normalize_brake_percent_candidate(value) {
+                    results.push((offset, normalized, score));
+                }
+            }
+
+            results.sort_by(|a, b| b.2.partial_cmp(&a.2).unwrap_or(std::cmp::Ordering::Equal));
+            results
+                .into_iter()
+                .take(max_results)
+                .map(|(offset, normalized, _)| (offset, normalized))
+                .collect()
+        }
+    }
+
+    /// Emits plausible float-like values from the current player's LMU telemetry block.
+    /// This is meant for live debugging while the game is running, to narrow down the real brake field.
+    pub fn dump_player_float_candidates(&self, max_results: usize) -> Vec<(usize, f64)> {
+        unsafe {
+            let telemetry = self.mapped_view.add(LMU_TELEMETRY_OFFSET);
+            let active_vehicles = *telemetry;
+            let player_idx = *telemetry.add(1);
+
+            if active_vehicles == 0 {
+                return Vec::new();
+            }
+
+            let target_idx = if player_idx < active_vehicles && player_idx < LMU_MAX_VEHICLES {
+                player_idx
+            } else if let Some(preferred_idx) = self.preferred_vehicle_idx.get() {
+                preferred_idx
+            } else {
+                0
+            };
+
+            let info_base = telemetry.add(LMU_TELEM_INFO_OFFSET + (target_idx as usize * LMU_TELEM_INFO_SIZE));
+            let mut results = Vec::new();
+            let mut count = 0usize;
+
+            for offset in (0..LMU_TELEM_INFO_SIZE).step_by(4) {
+                let value = *(info_base.add(offset) as *const f32) as f64;
+                if !value.is_finite() {
+                    continue;
+                }
+                if value >= 0.0 && value <= 150.0 && (value > 0.01 || offset < 256) {
+                    results.push((offset, value));
+                    count += 1;
+                    if count >= max_results {
+                        break;
+                    }
+                }
+            }
+
+            results
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{brake_candidate_score, normalize_brake_percent_candidate};
+    use crate::lmu_config::LMU_BRAKE_CANDIDATE_OFFSETS;
+
+    #[test]
+    fn normalize_brake_percent_candidate_handles_fractional_and_percent_like_values() {
+        assert_eq!(normalize_brake_percent_candidate(0.0), Some(0.0));
+        assert_eq!(normalize_brake_percent_candidate(0.032), None);
+        assert_eq!(normalize_brake_percent_candidate(0.5), Some(50.0));
+        assert_eq!(normalize_brake_percent_candidate(12.5), Some(12.5));
+        assert_eq!(normalize_brake_percent_candidate(250.0), None);
+    }
+
+    #[test]
+    fn brake_candidate_score_prefers_realistic_brake_values() {
+        assert!(brake_candidate_score(0.5) > brake_candidate_score(999.0));
+        assert!(brake_candidate_score(12.5) > brake_candidate_score(999.0));
+    }
+
+    #[test]
+    fn brake_candidate_offsets_cover_the_known_driver_input_window() {
+        assert!(LMU_BRAKE_CANDIDATE_OFFSETS.contains(&0x264));
+        assert!(LMU_BRAKE_CANDIDATE_OFFSETS.contains(&0x27c));
+        assert!(LMU_BRAKE_CANDIDATE_OFFSETS.iter().all(|&offset| offset <= 0x2f0));
+    }
+
+    #[test]
+    fn normalize_simetry_brake_percent_converts_common_pedal_inputs() {
+        assert_eq!(super::normalize_simetry_brake_percent(0.0), Some(0));
+        assert_eq!(super::normalize_simetry_brake_percent(0.032), Some(0));
+        assert_eq!(super::normalize_simetry_brake_percent(0.5), Some(50));
+        assert_eq!(super::normalize_simetry_brake_percent(0.25), Some(25));
+        assert_eq!(super::normalize_simetry_brake_percent(72.0), Some(72));
+        assert_eq!(super::normalize_simetry_brake_percent(1.5), Some(0));
+        assert_eq!(super::normalize_simetry_brake_percent(-0.1), None);
+        assert_eq!(super::normalize_simetry_brake_percent(101.0), None);
     }
 }
 

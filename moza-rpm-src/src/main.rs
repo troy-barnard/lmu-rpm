@@ -13,11 +13,11 @@ use std::time::{Duration, Instant};
 use tokio::sync::watch;
 use tokio::time::{sleep as tokio_sleep, timeout};
 
-use crate::lmu::LmuSharedMemory;
+use crate::lmu::{normalize_simetry_brake_percent, LmuSharedMemory};
 use crate::moza::MozaSerial;
 use crate::runtime::{
-    clamp_f32, env_flag, read_env_u64_ms, should_log_sample, RuntimeControl, RuntimeControlFile,
-    MENU_BUTTON_REFRESH_INTERVAL,
+    clamp_f32, env_flag, read_env_u64_ms, should_log_brake_sample, should_log_sample, RuntimeControl,
+    RuntimeControlFile, MENU_BUTTON_REFRESH_INTERVAL,
 };
 
 /// Entrypoint for the telemetry bridge.
@@ -68,7 +68,65 @@ async fn main() {
     // Telemetry values are passed through a watch channel so the main loop can update the
     // display without blocking the serial writer or the LMU reader.
     let (tx, mut rx) = watch::channel(0u8);
+    let (brake_tx, _brake_rx) = watch::channel(None::<u8>);
     let (control_tx, mut control_rx) = watch::channel(control);
+
+    let mut brake_debug_log = if debug {
+        OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open("moza-rpm-debug.log")
+            .ok()
+    } else {
+        None
+    };
+    let mut brake_log_debug = move |line: &str| {
+        if let Some(file) = brake_debug_log.as_mut() {
+            let _ = writeln!(file, "{line}");
+            let _ = file.flush();
+        }
+    };
+
+    tokio::task::spawn_blocking(move || {
+        let mut last_logged_brake_percent: Option<u8> = None;
+        let mut last_sample_log = Instant::now() - sample_log_interval;
+
+        println!("Brake telemetry task started (LMU shared memory path)");
+        brake_log_debug("Brake telemetry task started (LMU shared memory path)");
+
+        loop {
+            match LmuSharedMemory::connect() {
+                Ok(shared_mem) => {
+                    println!("Brake telemetry: connected to LMU shared memory");
+                    brake_log_debug("Brake telemetry: connected to LMU shared memory");
+                    loop {
+                        if let Some(brake_raw) = shared_mem.read_player_brake_percent() {
+                            brake_log_debug(&format!("[RAW] brake value: {}", brake_raw));
+                            if let Some(percent) = normalize_simetry_brake_percent(brake_raw) {
+                                let _ = brake_tx.send(Some(percent));
+                                if should_log_brake_sample(percent, last_logged_brake_percent, last_sample_log, sample_log_interval) {
+                                    println!("Brake telemetry sample: brake_percent={percent}");
+                                    brake_log_debug(&format!("Brake telemetry sample: brake_percent={percent}"));
+                                    last_sample_log = Instant::now();
+                                    last_logged_brake_percent = Some(percent);
+                                }
+                            } else if last_logged_brake_percent.is_some_and(|value| value > 0) {
+                                println!("Brake telemetry sample: brake_percent=0");
+                                brake_log_debug("Brake telemetry sample: brake_percent=0");
+                                last_sample_log = Instant::now();
+                                last_logged_brake_percent = Some(0);
+                            }
+                        }
+                        std::thread::sleep(Duration::from_millis(10));
+                    }
+                }
+                Err(_) => {
+                    brake_log_debug("Brake telemetry: LMU shared memory not found");
+                    std::thread::sleep(Duration::from_secs(1));
+                }
+            }
+        }
+    });
 
     let mut moza = MozaSerial::create().expect("Failed to open port");
     moza
@@ -118,6 +176,8 @@ async fn main() {
                         moza.refresh_button_colors().expect("Failed to refresh button colors");
                         last_button_refresh = Instant::now();
                     }
+                    // Poll for button input
+                    let _ = moza.try_read_button_input();
                 }
                 Ok(_) => {
                     telemetry_seen = true;
@@ -132,6 +192,8 @@ async fn main() {
                     if menu_refresh_enabled {
                         menu_refresh_enabled = false;
                     }
+                    // Poll for button input
+                    let _ = moza.try_read_button_input();
                 }
             }
         }
@@ -214,10 +276,6 @@ async fn main() {
                                 println!("RPM telemetry active.");
                                 log_debug("RPM telemetry active.");
                                 saw_rpm_sample = true;
-                            }
-                            if let Some(brake_percent) = shared_mem.read_player_brake_percent() {
-                                println!("Brake telemetry sample: brake_percent={brake_percent:.1}");
-                                log_debug(&format!("Brake telemetry sample: brake_percent={brake_percent:.1}"));
                             }
                             if should_log_sample(percent, last_logged_percent, last_sample_log, sample_log_interval) {
                                 println!("RPM telemetry sample: rpm={rpm:.0} max_rpm={max_rpm:.0} percent={percent}");

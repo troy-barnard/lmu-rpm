@@ -17,3 +17,7 @@ default-features = false
 [dependencies.uom]
 version = "0.34.0"
 features = ["serde"]
+
+[[bin]]
+name = "lmu_dump"
+path = "src/lmu_dump.rs"

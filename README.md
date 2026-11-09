@@ -16,12 +16,16 @@ The approach uses a vendored copy of [moza-rpm](https://github.com/wildernessmit
 
 ## Configuration
 
-Before running any scripts, you need to customize `secrets.json` for your system:
+All machine-specific settings live in local config files that are not committed to git.
+
+Create your local config from the template before running any scripts:
 
 ```bash
 cp example.secrets.json secrets.json
 # Edit secrets.json with your Steam library paths, Proton installation paths, and app ID
 ```
+
+The generated control file `moza-rpm-control.env` is also local-only and stores runtime GUI state for your machine.
 
 Key settings in `secrets.json`:
 - `steam.app_id`: Le Mans Ultimate Steam app ID (default: 2399420)

@@ -190,11 +190,8 @@ cleanup() {
     status_line "INFO" "Bridge process group stopped."
   fi
 
-  if [ -n "$STATUS_GUI_PID" ] && kill -0 "$STATUS_GUI_PID" 2>/dev/null; then
-    kill -TERM -- "-$STATUS_GUI_PID" >/dev/null 2>&1 || true
-    sleep 1
-    kill -KILL -- "-$STATUS_GUI_PID" >/dev/null 2>&1 || true
-  fi
+  # The GUI was launched with setsid (separate session), so kill by pattern instead.
+  pkill -f "python3.*status-gui.py" >/dev/null 2>&1 || true
 }
 trap cleanup EXIT INT TERM
 
@@ -296,6 +293,15 @@ pump_bridge_status_from_log() {
         ;;
       "RPM telemetry active."*)
         status_line "SUCCESS" "$line"
+        ;;
+      "Brake telemetry API sample:"*)
+        status_line "INFO" "$line"
+        ;;
+      "Brake telemetry sample:"*)
+        status_line "INFO" "$line"
+        ;;
+      "Brake probe:"*)
+        status_line "INFO" "$line"
         ;;
     esac
   done < <(tail -c +"$start_byte" "$LOG_FILE" 2>/dev/null || true)

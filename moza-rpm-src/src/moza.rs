@@ -59,6 +59,26 @@ impl MozaSerial {
         Ok(())
     }
 
+    /// Attempts to read available button input data from the serial port.
+    /// Logs any data received as hex for protocol discovery.
+    pub fn try_read_button_input(&mut self) -> std::io::Result<()> {
+        let mut buffer = [0u8; 64];
+        match self.port.read(&mut buffer) {
+            Ok(n) if n > 0 => {
+                let hex_str = buffer[..n]
+                    .iter()
+                    .map(|b| format!("{:02x}", b))
+                    .collect::<Vec<_>>()
+                    .join(" ");
+                println!("Button input bytes [{}]: {}", n, hex_str);
+            }
+            Ok(_) => {} // No data available
+            Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {} // Non-blocking read, no data
+            Err(e) => return Err(e),
+        }
+        Ok(())
+    }
+
     /// Builds and sends an RPM LED bitmask update for the given percent.
     pub fn send_rpm_telemetry_command(
         &mut self,
