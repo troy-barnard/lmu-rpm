@@ -31,11 +31,11 @@ echo "Using Proton: $PROTON_BIN"
 echo "Running brake monitor..."
 echo ""
 
-BRAKE_MONITOR_EXE="$ROOT_DIR/moza-rpm-src/target/x86_64-pc-windows-gnu/release/brake_monitor.exe"
+BRAKE_MONITOR_EXE="$ROOT_DIR/target/x86_64-pc-windows-gnu/release/brake_monitor.exe"
 
 if [ ! -f "$BRAKE_MONITOR_EXE" ]; then
   echo "Error: brake_monitor.exe not found at $BRAKE_MONITOR_EXE" >&2
-  echo "Run: cd $ROOT_DIR/moza-rpm-src && cargo build --release --bin brake_monitor" >&2
+  echo "Run: cd $ROOT_DIR && cargo build --release --bin brake_monitor" >&2
   exit 1
 fi
 

@@ -11,7 +11,7 @@ source "$SCRIPT_DIR/read-secrets.sh" 2>/dev/null || {
 
 APP_ID="${STEAM_APP_ID:-$STEAM_APP_ID}"
 BINARY="$ROOT_DIR/lmu-dump.exe"
-LOCAL_SOURCE_DIR="$ROOT_DIR/moza-rpm-src"
+LOCAL_SOURCE_DIR="$ROOT_DIR"
 FALLBACK_SOURCE_DIR="$ROOT_DIR/../moza-rpm"
 LOG_FILE="${LMU_OFFSET_LOG:-$ROOT_DIR/lmu-offset-batch.log}"
 OFFSETS=("${@:-0x01f5e4 0x01f79c 0x01f960 0x01f96c}")

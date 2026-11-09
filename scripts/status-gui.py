@@ -19,7 +19,7 @@ LEVEL_COLORS = {
 
 BG = "#14181f"
 FG = "#d6deeb"
-CONTROL_POLL_MS = 100  # Reduced from 300ms for more responsive brake telemetry
+CONTROL_POLL_MS = 50  # Ultra-responsive polling for brake telemetry
 CONTROL_WRITE_DEBOUNCE_MS = 180
 
 RPM_SCALE_MIN = 0.6

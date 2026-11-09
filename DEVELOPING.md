@@ -8,7 +8,7 @@ This project folder structure:
 
 - `.` (project root)
   - Self-contained runtime wrapper and bridge source.
-  - Owns launch scripts, setup scripts, docs, deployed moza-rpm.exe, and bridge source at `moza-rpm-src/`.
+  - Owns launch scripts, setup scripts, docs, deployed moza-rpm.exe, and bridge source.
 
 Optional external upstream mirror (not required for runtime):
 
@@ -17,7 +17,7 @@ Optional external upstream mirror (not required for runtime):
 
 Practical rule:
 
-- For this project, edit Rust bridge logic in `moza-rpm-src/src/main.rs`.
+- For this project, edit Rust bridge logic in `src/main.rs`.
 - Edit startup/runtime behavior in `scripts/` directory.
 
 ## 2. Configuration management (secrets.json)
@@ -74,7 +74,7 @@ Data path:
 
 Key files:
 
-- `moza-rpm-src/src/main.rs`
+- `src/main.rs`
   - LMU shared-memory reader offsets and map names.
   - LED threshold mapping and initialization behavior.
 - `scripts/setup-moza-rpm.sh`
@@ -88,9 +88,8 @@ Key files:
 
 Build and deploy manually:
 
-1. cd moza-rpm-src
-2. cargo build --release --target x86_64-pc-windows-gnu
-3. cp target/x86_64-pc-windows-gnu/release/moza-rpm.exe ../moza-rpm.exe
+1. cargo build --release --target x86_64-pc-windows-gnu
+2. cp target/x86_64-pc-windows-gnu/release/moza-rpm.exe ./moza-rpm.exe
 
 Run bridge manually:
 
@@ -191,7 +190,7 @@ Buttons or colors overridden unexpectedly:
 Current state:
 
 - This project is a git repo (branch `main`).
-- Bridge source required by runtime is vendored at `moza-rpm-src/`.
+- Bridge source required by runtime is in the project root.
 
 Recommended setup:
 
@@ -199,7 +198,7 @@ Recommended setup:
 
 Typical commit flow:
 
-1. git add README.md DEVELOPING.md scripts moza-rpm-src
+1. git add README.md DEVELOPING.md scripts src/ Cargo.toml Cargo.lock
 2. git commit -m "Update bridge and launcher"
 3. git push -u origin main
 

@@ -2,7 +2,7 @@
 
 This project is a practical way to get RPM lights working on a Moza R9 + GS V2 wheel while running Le Mans Ultimate through Proton on Linux.
 
-The approach uses a vendored copy of [moza-rpm](https://github.com/wildernessmith/moza-rpm) under `moza-rpm-src/`, which talks to the wheel over the serial connection and drives the wheel LEDs from telemetry.
+The approach extends [moza-rpm](https://github.com/wildernessmith/moza-rpm) which talks to the wheel over the serial connection and drives the wheel LEDs from telemetry.
 
 ## What you need
 
@@ -46,10 +46,9 @@ rustup target add x86_64-pc-windows-gnu
 
 Note: `jq` is required for parsing the `secrets.json` configuration file.
 
-## 2. Build the bridge (local source in this folder)
+## 2. Build the bridge
 
 ```bash
-cd moza-rpm-src
 cargo build --release --target x86_64-pc-windows-gnu
 ```
 
@@ -88,7 +87,7 @@ MOZA_RPM_DEBUG=1 ./scripts/run-moza-rpm.sh
 
 That script will:
 
-- build the Windows bridge executable from `moza-rpm-src/` if needed
+- build the Windows bridge executable if needed
 - copy it into the Proton prefix
 - launch it through the same Proton runtime used for LMU
 
