@@ -36,6 +36,27 @@ use winapi::um::handleapi::CloseHandle;
 use winapi::um::memoryapi::{FILE_MAP_READ, MapViewOfFile, UnmapViewOfFile};
 use winapi::um::winbase::OpenFileMappingA;
 
+/// Normalizes a candidate brake value from LMU shared memory.
+///
+/// Helper function used internally by the LMU reader to validate brake values.
+/// Applies dead zone filtering and range checking.
+fn normalize_brake_percent_candidate(value: f64) -> Option<f64> {
+    if !value.is_finite() {
+        return None;
+    }
+    // Increased dead zone from 5% to 8% to filter out vibration noise from flat spots
+    if value > 0.0 && value < 0.08 {
+        return None;
+    }
+    if (0.0..=1.5).contains(&value) {
+        return Some(value * 100.0);
+    }
+    if (1.0..=100.0).contains(&value) {
+        return Some(value);
+    }
+    None
+}
+
 /// Normalizes a raw brake value from LMU shared memory into a valid brake percentage (0-100).
 ///
 /// The shared memory stores brake as an f64, which can represent:
