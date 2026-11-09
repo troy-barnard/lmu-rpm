@@ -5,3 +5,4 @@ secrets.json
 moza-rpm-control.env
 *.log
 moza-rpm-status.log
+moza-rpm-status.log
