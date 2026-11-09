@@ -1,8 +1,7 @@
-# moza-rpm-debug.log
-# moza-rpm-launch.log
-moza-rpm.exe
-secrets.json
-moza-rpm-control.env
+# Runtime artifacts
 *.log
-moza-rpm-status.log
-moza-rpm-status.log
+*.exe
+moza-rpm-control.env
+
+# Secrets and configuration
+secrets.json
