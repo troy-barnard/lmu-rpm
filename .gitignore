@@ -2,6 +2,7 @@
 *.log
 *.exe
 moza-rpm-control.env
+.lmu_offset_watch.txt
 
 # Secrets and configuration
 secrets.json
