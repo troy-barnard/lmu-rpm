@@ -31,9 +31,13 @@ use crate::lmu_config::{
 };
 use std::cell::Cell;
 
+#[cfg(target_os = "windows")]
 use winapi::shared::ntdef::HANDLE;
+#[cfg(target_os = "windows")]
 use winapi::um::handleapi::CloseHandle;
+#[cfg(target_os = "windows")]
 use winapi::um::memoryapi::{FILE_MAP_READ, MapViewOfFile, UnmapViewOfFile};
+#[cfg(target_os = "windows")]
 use winapi::um::winbase::OpenFileMappingA;
 
 /// Normalizes a candidate brake value from LMU shared memory.
