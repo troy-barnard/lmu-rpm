@@ -202,20 +202,16 @@ pub fn should_log_brake_sample(
     last_sample_log: Instant,
     sample_log_interval: Duration,
 ) -> bool {
-    if percent == 0 {
-        return last_logged_percent.map_or(false, |previous| previous > 0) || last_sample_log.elapsed() >= sample_log_interval;
-    }
-
+    // Log immediately on significant changes (>= 5%) for responsiveness
     if let Some(previous) = last_logged_percent {
         if previous.abs_diff(percent) >= 5 {
             return true;
         }
-        if last_sample_log.elapsed() >= sample_log_interval && previous != percent {
-            return true;
-        }
     }
 
-    last_logged_percent.is_none() && last_sample_log.elapsed() >= sample_log_interval
+    // Otherwise log on fixed interval to keep graph moving forward smoothly
+    // This ensures the overlay graph always ticks, even when brake value is steady
+    last_sample_log.elapsed() >= sample_log_interval
 }
 
 pub fn clamp_f32(value: f32, min_value: f32, max_value: f32) -> f32 {

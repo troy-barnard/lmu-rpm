@@ -149,11 +149,15 @@ async fn main() {
                                     last_sample_log = Instant::now();
                                     last_logged_brake_percent = Some(percent);
                                 }
-                            } else if last_logged_brake_percent.is_some_and(|value| value > 0) {
-                                println!("Brake telemetry sample: brake_percent=0");
-                                brake_log_debug("Brake telemetry sample: brake_percent=0");
-                                last_sample_log = Instant::now();
-                                last_logged_brake_percent = Some(0);
+                            } else {
+                                // Out of range; treat as zero
+                                let _ = brake_tx.send(Some(0));
+                                if should_log_brake_sample(0, last_logged_brake_percent, last_sample_log, sample_log_interval) {
+                                    println!("Brake telemetry sample: brake_percent=0");
+                                    brake_log_debug("Brake telemetry sample: brake_percent=0");
+                                    last_sample_log = Instant::now();
+                                    last_logged_brake_percent = Some(0);
+                                }
                             }
                         }
                         std::thread::sleep(Duration::from_millis(10));

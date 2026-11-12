@@ -47,13 +47,13 @@ pub const LMU_ENGINE_RPM_OFFSET: usize = 356;
 /// Offset within a vehicle telemetry record for engine max RPM (`f64`).
 pub const LMU_ENGINE_MAX_RPM_OFFSET: usize = 532;
 
-/// Primary brake offset: mFilteredBrake (0x1a4) — game-engine smoothed, lower noise
-/// This reads the brake value with game-applied filtering, reducing vibration noise from flat spots.
-pub const LMU_BRAKE_PERCENT_OFFSET: usize = 0x1a4;
+/// Primary brake offset: mUnfilteredBrake (0x18c) — confirmed working, raw pedal input
+/// This reads the brake value that was verified responding to pedal motion in testing.
+pub const LMU_BRAKE_PERCENT_OFFSET: usize = 0x18c;
 
-/// Fallback brake offset: mUnfilteredBrake (0x18c) — raw pedal input
-/// Used if the filtered value is momentarily unavailable; raw input has more response but higher noise.
-pub const LMU_BRAKE_PERCENT_FALLBACK_OFFSET: usize = 0x18c;
+/// Fallback brake offset: mFilteredBrake (0x1a4) — game-engine smoothed, lower noise
+/// Used as a fallback; includes game-applied filtering that reduces vibration noise from flat spots.
+pub const LMU_BRAKE_PERCENT_FALLBACK_OFFSET: usize = 0x1a4;
 
 /// Upper bound for valid LMU vehicle indices in shared telemetry.
 pub const LMU_MAX_VEHICLES: u8 = 104;

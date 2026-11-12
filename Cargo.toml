@@ -21,3 +21,11 @@ features = ["serde"]
 [[bin]]
 name = "lmu_dump"
 path = "src/lmu_dump.rs"
+
+[[bin]]
+name = "moza-rpm"
+path = "src/main.rs"
+
+[[bin]]
+name = "brake_monitor"
+path = "src/bin/brake_monitor.rs"
